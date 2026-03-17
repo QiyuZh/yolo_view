@@ -1,0 +1,25 @@
+﻿__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Temporary unit-test folders
+ut_filemgr_*/
+ut_validator_*/
+
+# Virtual env
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Dataset / weights (optional)
+*.pt
+*.onnx
+*.engine
+*.ckpt
+*.pth
