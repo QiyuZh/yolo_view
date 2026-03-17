@@ -5,7 +5,7 @@ import copy
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QUndoStack
 from PyQt6.QtWidgets import (
     QApplication,
@@ -54,6 +54,70 @@ ANOMALY_TYPES: list[tuple[str, str]] = [
 ]
 
 
+
+
+class AutoAnnotateWorker(QObject):
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(object)
+
+    def __init__(self, model_path: Path, conf_threshold: float, tasks: list[tuple[int, str]]) -> None:
+        super().__init__()
+        self.model_path = model_path
+        self.conf_threshold = conf_threshold
+        self.tasks = tasks
+        self._canceled = False
+
+    def cancel(self) -> None:
+        self._canceled = True
+
+    def run(self) -> None:
+        try:
+            annotator = AutoAnnotator(self.model_path, conf_threshold=self.conf_threshold)
+        except AutoAnnotatorError as exc:
+            self.finished.emit({
+                "fatal_error": str(exc),
+                "results": [],
+                "model_names": [],
+                "failed": 0,
+                "first_error": None,
+                "canceled": False,
+            })
+            return
+
+        model_names = annotator.class_names()
+        results: list[dict[str, object]] = []
+        failed = 0
+        first_error: str | None = None
+
+        total = len(self.tasks)
+        done = 0
+
+        for idx, image_path in self.tasks:
+            if self._canceled:
+                break
+
+            try:
+                annotations = annotator.predict(Path(image_path))
+                results.append({"idx": idx, "annotations": annotations, "error": None})
+            except AutoAnnotatorError as exc:
+                failed += 1
+                if first_error is None:
+                    first_error = str(exc)
+                results.append({"idx": idx, "annotations": None, "error": str(exc)})
+
+            done += 1
+            self.progress.emit(done, total)
+
+        self.finished.emit({
+            "fatal_error": None,
+            "results": results,
+            "model_names": model_names,
+            "failed": failed,
+            "first_error": first_error,
+            "canceled": self._canceled,
+        })
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -78,6 +142,10 @@ class MainWindow(QMainWindow):
         self.undo_stack = QUndoStack(self)
         self.auto_model_path: Path | None = None
         self.auto_conf_threshold: float = 0.25
+        self._auto_thread: QThread | None = None
+        self._auto_worker: AutoAnnotateWorker | None = None
+        self._auto_progress: QProgressDialog | None = None
+        self._auto_running: bool = False
 
         self._setup_ui()
         self._apply_style()
@@ -528,6 +596,36 @@ class MainWindow(QMainWindow):
         finally:
             self._updating_ui = False
 
+    def _needs_file_table_full_rebuild_after_auto(self) -> bool:
+        """Decide whether auto-annotate must rebuild full table."""
+        if self.search_edit.text().strip():
+            return True
+        if self.mark_filter_combo.currentText() != "全部":
+            return True
+        if self.status_filter_combo.currentText() != "全部状态":
+            return True
+        if "是否标注" in self.sort_combo.currentText():
+            return True
+        return False
+
+    def _refresh_after_auto_annotate(self, touched: list[int]) -> None:
+        if not touched:
+            return
+
+        if self._needs_file_table_full_rebuild_after_auto():
+            self._rebuild_file_table()
+        else:
+            for idx in touched:
+                self._refresh_visible_row_for_index(idx)
+
+        # touched small -> incremental anomaly update; touched large -> one-pass rebuild
+        if len(touched) <= 40:
+            for idx in touched:
+                self._update_anomaly_for_index(idx, refresh_combo=False)
+            self._refresh_anomaly_combo()
+        else:
+            self._rebuild_anomaly_index(full_scan=False)
+
     def _matches_filters(self, idx: int, keyword: str, mark_filter: str, status_filter: str) -> bool:
         if keyword:
             target = (
@@ -969,6 +1067,10 @@ class MainWindow(QMainWindow):
         self._write_annotations_for_item(self.current_index, item, self.current_annotations)
 
     def auto_annotate(self, _checked: bool = False) -> None:
+        if self._auto_running:
+            QMessageBox.information(self, "自动标注进行中", "已有自动标注任务在执行，请稍候。")
+            return
+
         if not self.items:
             QMessageBox.information(self, "未导入数据集", "请先导入数据集。")
             return
@@ -1009,16 +1111,6 @@ class MainWindow(QMainWindow):
         self.auto_model_path = Path(model_file)
         self.auto_conf_threshold = conf_threshold
 
-        try:
-            annotator = AutoAnnotator(self.auto_model_path, conf_threshold=self.auto_conf_threshold)
-        except AutoAnnotatorError as exc:
-            QMessageBox.warning(self, "模型加载失败", str(exc))
-            return
-
-        model_names = annotator.class_names()
-        if model_names:
-            self.class_names = model_names
-
         if scope == "当前图片":
             if self.current_index < 0:
                 QMessageBox.information(self, "未选择", "请先选择一个样本。")
@@ -1032,23 +1124,27 @@ class MainWindow(QMainWindow):
                 if item.image_path is not None and item.image_path.exists()
             ]
 
-        self._run_auto_annotate(annotator, indices)
+        self._run_auto_annotate_async(self.auto_model_path, self.auto_conf_threshold, indices)
 
     def _is_unlabeled_anomaly(self, idx: int) -> bool:
         item = self.items[idx]
         if item.image_path is None or (not item.image_path.exists()):
             return False
 
+        label_path = item.label_path
+        if label_path is None or (not label_path.exists()):
+            return True
+
+        try:
+            if label_path.stat().st_size == 0:
+                return True
+        except Exception:
+            return True
+
+        # 性能优化：仅使用已有缓存结果，不主动触发全量解析。
         validation = self.validation_map.get(idx)
         if validation is None:
-            if item.label_path is None:
-                return True
-            try:
-                if item.label_path.exists() and item.label_path.stat().st_size == 0:
-                    return True
-            except Exception:
-                pass
-            validation = self._ensure_validation(idx)
+            return False
 
         if len(validation.annotations) == 0:
             return True
@@ -1056,66 +1152,203 @@ class MainWindow(QMainWindow):
         target_codes = {"label_missing", "empty_label", "empty_annotation"}
         return any(issue.code in target_codes for issue in validation.issues)
 
-    def _run_auto_annotate(self, annotator: AutoAnnotator, indices: list[int]) -> None:
+    def _run_auto_annotate_async(self, model_path: Path, conf_threshold: float, indices: list[int]) -> None:
         if not indices:
             QMessageBox.information(self, "无可处理文件", "没有可用于自动标注的图片。")
             return
 
-        progress = QProgressDialog("正在执行自动标注...", "取消", 0, len(indices), self)
+        tasks: list[tuple[int, str]] = []
+        for idx in indices:
+            image_path = self.items[idx].image_path
+            if image_path is None or (not image_path.exists()):
+                continue
+            tasks.append((idx, str(image_path)))
+
+        if not tasks:
+            QMessageBox.information(self, "无可处理文件", "没有可用于自动标注的图片。")
+            return
+
+        self._auto_running = True
+        self.statusBar().showMessage("自动标注执行中，请稍候...")
+
+        progress = QProgressDialog("正在执行自动标注（后台）...", "取消", 0, len(tasks), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        self._auto_progress = progress
 
-        updated = 0
-        failed = 0
-        first_error: str | None = None
+        thread = QThread(self)
+        worker = AutoAnnotateWorker(model_path=model_path, conf_threshold=conf_threshold, tasks=tasks)
+        worker.moveToThread(thread)
 
-        for n, idx in enumerate(indices, start=1):
-            if progress.wasCanceled():
+        thread.started.connect(worker.run)
+        progress.canceled.connect(worker.cancel)
+        worker.progress.connect(self._on_auto_progress)
+        worker.finished.connect(self._on_auto_annotate_finished)
+
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._auto_thread = thread
+        self._auto_worker = worker
+        thread.start()
+        progress.show()
+
+    def _on_auto_progress(self, done: int, total: int) -> None:
+        if self._auto_progress is None:
+            return
+        self._auto_progress.setMaximum(total)
+        self._auto_progress.setValue(done)
+
+    def _on_auto_annotate_finished(self, payload: object) -> None:
+        if self._auto_progress is not None:
+            self._auto_progress.close()
+            self._auto_progress.deleteLater()
+            self._auto_progress = None
+
+        self._auto_worker = None
+        self._auto_thread = None
+
+        data = payload if isinstance(payload, dict) else {}
+        fatal_error = data.get("fatal_error")
+        if fatal_error:
+            self._auto_running = False
+            self.statusBar().showMessage("自动标注失败。")
+            QMessageBox.warning(self, "自动标注失败", str(fatal_error))
+            return
+
+        model_names = data.get("model_names")
+        if isinstance(model_names, list) and model_names:
+            self.class_names = [str(v) for v in model_names]
+
+        results = data.get("results") if isinstance(data.get("results"), list) else []
+
+        self._auto_apply_state = {
+            "results": results,
+            "pos": 0,
+            "updated": 0,
+            "touched": [],
+            "failed": int(data.get("failed") or 0),
+            "first_error": data.get("first_error"),
+            "canceled": bool(data.get("canceled")),
+        }
+
+        progress = QProgressDialog("正在应用标注结果...", "取消", 0, len(results), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        self._auto_apply_progress = progress
+        progress.show()
+
+        QTimer.singleShot(0, self._apply_auto_results_chunk)
+
+    def _apply_auto_results_chunk(self) -> None:
+        state = getattr(self, "_auto_apply_state", None)
+        if not isinstance(state, dict):
+            return
+
+        results = state.get("results")
+        if not isinstance(results, list):
+            results = []
+
+        pos = int(state.get("pos") or 0)
+        total = len(results)
+        chunk_size = 16
+
+        progress = getattr(self, "_auto_apply_progress", None)
+
+        processed = 0
+        while pos < total and processed < chunk_size:
+            if progress is not None and progress.wasCanceled():
+                state["canceled"] = True
+                pos = total
                 break
 
+            entry = results[pos]
+            pos += 1
+            processed += 1
+
+            if not isinstance(entry, dict):
+                continue
+
+            idx = entry.get("idx")
+            annotations = entry.get("annotations")
+            if not isinstance(idx, int) or not isinstance(annotations, list):
+                continue
+
             item = self.items[idx]
-            if item.image_path is None or (not item.image_path.exists()):
-                progress.setValue(n)
-                QApplication.processEvents()
-                continue
-
-            try:
-                annotations = annotator.predict(item.image_path)
-            except AutoAnnotatorError as exc:
-                failed += 1
-                if first_error is None:
-                    first_error = str(exc)
-                progress.setValue(n)
-                QApplication.processEvents()
-                continue
-
             if self._write_annotations_for_item(idx, item, annotations):
-                updated += 1
-                validation = validate_item(item)
-                validation.annotations = copy.deepcopy(annotations)
-                self.validation_map[idx] = validation
+                state["updated"] = int(state.get("updated") or 0) + 1
+                touched = state.get("touched")
+                if not isinstance(touched, list):
+                    touched = []
+                    state["touched"] = touched
+                touched.append(idx)
+
+                self.validation_map[idx] = FileValidation(
+                    item_key=item.key,
+                    issues=[],
+                    annotations=copy.deepcopy(annotations),
+                )
 
                 if idx == self.current_index:
                     self.current_annotations = copy.deepcopy(annotations)
 
-            progress.setValue(n)
-            QApplication.processEvents()
+        state["pos"] = pos
 
-        progress.close()
+        if progress is not None:
+            progress.setMaximum(total)
+            progress.setValue(pos)
 
-        if self.current_index >= 0:
+        if pos < total:
+            QTimer.singleShot(0, self._apply_auto_results_chunk)
+            return
+
+        self._finish_auto_apply()
+
+    def _finish_auto_apply(self) -> None:
+        state = getattr(self, "_auto_apply_state", None)
+        if not isinstance(state, dict):
+            self._auto_running = False
+            return
+
+        progress = getattr(self, "_auto_apply_progress", None)
+        if progress is not None:
+            progress.close()
+            progress.deleteLater()
+            self._auto_apply_progress = None
+
+        updated = int(state.get("updated") or 0)
+        failed = int(state.get("failed") or 0)
+        canceled = bool(state.get("canceled"))
+        first_error = state.get("first_error")
+        touched = state.get("touched")
+        if not isinstance(touched, list):
+            touched = []
+
+        self._refresh_after_auto_annotate(touched)
+        # list/anomaly refresh already handled above
+        # avoid duplicate full refresh here
+
+        if self.current_index >= 0 and self.current_index in touched:
             self.on_file_selected(self.current_index, refresh_table=False)
-
-        self._rebuild_file_table()
-        for idx in indices:
-            self._update_anomaly_for_index(idx, refresh_combo=False)
-        self._refresh_anomaly_combo()
 
         msg = f"自动标注完成：成功 {updated} 张"
         if failed > 0:
             msg += f"，失败 {failed} 张"
+        if canceled:
+            msg += "\n任务已取消，未完成全部图片。"
         if first_error:
             msg += f"\n首个错误：{first_error}"
 
+        self._auto_apply_state = None
+        self._auto_running = False
+        self.statusBar().showMessage("自动标注完成。")
         QMessageBox.information(self, "自动标注完成", msg)
 
     def validate_all(self, _checked: bool = False) -> None:
