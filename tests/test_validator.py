@@ -32,6 +32,16 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(len(issues), 0)
         self.assertAlmostEqual(anns[0].confidence or 0.0, 0.88, places=3)
 
+    def test_parse_polygon_points(self):
+        p = self._case_dir / "c.txt"
+        p.write_text("2 0.1 0.1 0.3 0.1 0.35 0.25 0.2 0.4 0.88\n", encoding="utf-8")
+        anns, issues = parse_yolo_label(p)
+        self.assertEqual(len(anns), 1)
+        self.assertEqual(len([x for x in issues if x.severity == "error"]), 0)
+        self.assertEqual(anns[0].shape_type, "rotated")
+        self.assertEqual(len(anns[0].points), 4)
+        self.assertAlmostEqual(anns[0].confidence or 0.0, 0.88, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

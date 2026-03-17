@@ -72,3 +72,21 @@ class DeleteAnnotationCommand(QUndoCommand):
     def redo(self) -> None:
         self.annotations.pop(self.index)
         self.on_apply(min(self.index, len(self.annotations) - 1))
+
+
+class AddAnnotationCommand(QUndoCommand):
+    def __init__(self, annotations: list[Annotation], index: int, value: Annotation, on_apply) -> None:
+        super().__init__("新增标注")
+        self.annotations = annotations
+        self.index = index
+        self.value = replace(value)
+        self.on_apply = on_apply
+
+    def undo(self) -> None:
+        if 0 <= self.index < len(self.annotations):
+            self.annotations.pop(self.index)
+        self.on_apply(min(self.index, len(self.annotations) - 1))
+
+    def redo(self) -> None:
+        self.annotations.insert(self.index, replace(self.value))
+        self.on_apply(self.index)

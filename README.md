@@ -147,3 +147,53 @@ pyinstaller --noconfirm --clean --windowed --name yolo-viewer main.py
 ```text
 dist/yolo-viewer/yolo-viewer.app
 ```
+
+## 轻量化打包（推荐）
+
+为了把可执行文件体积尽可能做小，建议使用 `lite` 构建：
+
+- 不内置 `ultralytics/torch`（自动标注功能不可用）
+- 不内置 `opencv/numpy`（走 Qt 解码，体积更小）
+
+### Windows （最小体积）
+
+```powershell
+# onefile（默认，单文件）
+.\scripts\build_windows_lite.ps1
+
+# onedir（启动更快，目录形式）
+.\scripts\build_windows_lite.ps1 -OneDir
+
+# 如已安装 UPX，可进一步压缩
+.\scripts\build_windows_lite.ps1 -UpxDir "C:\tools\upx"
+```
+
+### macOS （最小体积）
+
+```bash
+chmod +x ./scripts/build_macos_lite.sh
+./scripts/build_macos_lite.sh
+# 目录模式
+./scripts/build_macos_lite.sh --onedir
+```
+
+### 完整版（含自动标注依赖，体积更大）
+
+Windows:
+
+```powershell
+.\scripts\build_windows_full.ps1
+```
+
+macOS:
+
+```bash
+chmod +x ./scripts/build_macos_full.sh
+./scripts/build_macos_full.sh
+```
+
+### 体积优化建议
+
+1. 追求最小体积：`lite + onefile + UPX`
+2. 追求启动速度：`lite + onedir`
+3. 必须使用自动标注：使用 `full` 构建

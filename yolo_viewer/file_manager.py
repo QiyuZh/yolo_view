@@ -5,11 +5,12 @@ from pathlib import Path
 
 from .models import DatasetItem
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 LABEL_SUFFIX = ".txt"
 IMAGE_ROOT_HINTS = {"images", "image", "imgs"}
 LABEL_ROOT_HINTS = {"labels", "label", "anns", "annotations"}
 ALL_ROOT_HINTS = IMAGE_ROOT_HINTS | LABEL_ROOT_HINTS
+IGNORED_DIR_SEGMENTS = {"__label_backups__", "__pycache__", ".git", "build", "dist"}
 
 
 def _is_bucket_segment(segment: str) -> bool:
@@ -56,6 +57,14 @@ def _normalize_key(root: Path, path: Path, is_label: bool) -> str:
     return "/".join(cleaned)
 
 
+
+def _is_ignored_path(root: Path, path: Path) -> bool:
+    try:
+        rel_parts = [p.lower() for p in path.relative_to(root).parts[:-1]]
+    except Exception:
+        rel_parts = [p.lower() for p in path.parts]
+    return any(seg in IGNORED_DIR_SEGMENTS for seg in rel_parts)
+
 def scan_dataset(root_dir: Path) -> list[DatasetItem]:
     """Scan folder recursively and build image/label pairs lazily."""
     image_map: dict[str, list[Path]] = {}
@@ -63,6 +72,8 @@ def scan_dataset(root_dir: Path) -> list[DatasetItem]:
 
     for file_path in root_dir.rglob("*"):
         if not file_path.is_file():
+            continue
+        if _is_ignored_path(root_dir, file_path):
             continue
         suffix = file_path.suffix.lower()
         if suffix in IMAGE_SUFFIXES:
@@ -132,6 +143,51 @@ class PixmapCache:
             self._cache.popitem(last=False)
 
 
+def _load_with_qimage(path: Path, qimage_cls, qpixmap_cls):
+    image = qimage_cls(str(path))
+    if not image.isNull():
+        return qpixmap_cls.fromImage(image)
+    return qpixmap_cls()
+
+
+def _load_with_pillow(path: Path, qimage_cls, qpixmap_cls):
+    try:
+        from PIL import Image
+    except Exception:
+        return qpixmap_cls()
+
+    try:
+        with Image.open(path) as img:
+            if getattr(img, "n_frames", 1) > 1:
+                try:
+                    img.seek(0)
+                except Exception:
+                    pass
+
+            if img.mode in ("F", "I", "I;16", "I;16B", "I;16L"):
+                img = img.convert("L")
+
+            if img.mode not in ("RGB", "RGBA", "L"):
+                img = img.convert("RGB")
+
+            if img.mode == "L":
+                img = img.convert("RGB")
+
+            mode = img.mode
+            data = img.tobytes("raw", mode)
+            if mode == "RGB":
+                fmt = qimage_cls.Format.Format_RGB888
+                bpl = img.width * 3
+            else:
+                fmt = qimage_cls.Format.Format_RGBA8888
+                bpl = img.width * 4
+
+            qimg = qimage_cls(data, img.width, img.height, bpl, fmt).copy()
+            return qpixmap_cls.fromImage(qimg)
+    except Exception:
+        return qpixmap_cls()
+
+
 def load_pixmap(path: Path):
     """Decode image into QPixmap.
 
@@ -142,6 +198,21 @@ def load_pixmap(path: Path):
     except Exception as exc:
         raise RuntimeError("缺少 PyQt6，无法加载图片。") from exc
 
+    if not path.exists():
+        return QPixmap()
+    try:
+        if path.stat().st_size <= 0:
+            return QPixmap()
+    except Exception:
+        pass
+
+    suffix = path.suffix.lower()
+
+    # 明确排除 TIFF，避免解码异常和噪声日志。
+    if suffix in {".tif", ".tiff"}:
+        return QPixmap()
+
+
     try:
         import cv2
         import numpy as np
@@ -151,25 +222,43 @@ def load_pixmap(path: Path):
 
     if cv2 is not None and np is not None:
         try:
-            file_bytes = np.fromfile(str(path), dtype=np.uint8)
-            image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-            if image_bgr is not None:
-                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-                height, width, channels = image_rgb.shape
-                bytes_per_line = channels * width
-                q_image = QImage(
-                    image_rgb.data,
-                    width,
-                    height,
-                    bytes_per_line,
-                    QImage.Format.Format_RGB888,
-                ).copy()
-                return QPixmap.fromImage(q_image)
+            if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+            elif hasattr(cv2, "setLogLevel"):
+                cv2.setLogLevel(0)
         except Exception:
             pass
 
-    fallback = QImage(str(path))
+        try:
+            file_bytes = np.fromfile(str(path), dtype=np.uint8)
+            if file_bytes.size > 0:
+                image_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                if image_bgr is not None:
+                    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                    height, width, channels = image_rgb.shape
+                    bytes_per_line = channels * width
+                    q_image = QImage(
+                        image_rgb.data,
+                        width,
+                        height,
+                        bytes_per_line,
+                        QImage.Format.Format_RGB888,
+                    ).copy()
+                    return QPixmap.fromImage(q_image)
+        except Exception:
+            pass
+
+    fallback = _load_with_qimage(path, QImage, QPixmap)
     if not fallback.isNull():
-        return QPixmap.fromImage(fallback)
+        return fallback
+
+    fallback = _load_with_pillow(path, QImage, QPixmap)
+    if not fallback.isNull():
+        return fallback
 
     return QPixmap()
+
+
+
+
+

@@ -5,11 +5,13 @@ import copy
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon, QPixmap, QUndoStack
+from PyQt6.QtCore import QObject, QSize, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QBrush, QColor, QIcon, QPixmap, QUndoStack
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
+    QFrame,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -33,10 +35,11 @@ from PyQt6.QtWidgets import (
 )
 
 from .auto_annotator import AutoAnnotator, AutoAnnotatorError
+from .colors import class_color
 from .exporter import export_passed_files
 from .file_manager import PixmapCache, load_pixmap, scan_dataset
 from .models import Annotation, DatasetItem, FileValidation
-from .undo_commands import ChangeClassCommand, DeleteAnnotationCommand, UpdateAnnotationCommand
+from .undo_commands import AddAnnotationCommand, ChangeClassCommand, DeleteAnnotationCommand, UpdateAnnotationCommand
 from .validator import validate_item
 from .widgets.image_canvas import ImageCanvas
 
@@ -147,29 +150,42 @@ class MainWindow(QMainWindow):
         self._auto_progress: QProgressDialog | None = None
         self._auto_running: bool = False
 
+        self.theme_mode: str = "light"
+        self.theme_toggle_action: QAction | None = None
+
         self._setup_ui()
         self._apply_style()
 
     def _setup_ui(self) -> None:
-        self.setStatusBar(QStatusBar(self))
+        status_bar = QStatusBar(self)
+        status_bar.setSizeGripEnabled(False)
+        status_bar.setMinimumHeight(30)
+        self.setStatusBar(status_bar)
 
         toolbar = QToolBar("主工具栏")
+        toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(16, 16))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.addToolBar(toolbar)
 
         import_action = QAction("导入文件夹", self)
+        import_action.setShortcut("Ctrl+O")
         import_action.triggered.connect(self.import_folders)
         toolbar.addAction(import_action)
 
         append_action = QAction("追加文件夹", self)
+        append_action.setShortcut("Ctrl+Shift+O")
         append_action.triggered.connect(self.append_folders)
         toolbar.addAction(append_action)
 
         validate_action = QAction("全量校验", self)
+        validate_action.setShortcut("F5")
         validate_action.triggered.connect(self.validate_all)
         toolbar.addAction(validate_action)
 
         auto_annotate_action = QAction("加载模型自动标注", self)
+        auto_annotate_action.setShortcut("Ctrl+M")
         auto_annotate_action.triggered.connect(self.auto_annotate)
         toolbar.addAction(auto_annotate_action)
 
@@ -178,35 +194,71 @@ class MainWindow(QMainWindow):
         toolbar.addAction(export_passed_action)
 
         screenshot_action = QAction("保存截图", self)
+        screenshot_action.setShortcut("Ctrl+S")
         screenshot_action.triggered.connect(self.save_screenshot)
         toolbar.addAction(screenshot_action)
+
+        self.theme_toggle_action = QAction("极简暗色", self)
+        self.theme_toggle_action.setCheckable(True)
+        self.theme_toggle_action.toggled.connect(self.toggle_theme)
+        toolbar.addAction(self.theme_toggle_action)
 
         toolbar.addSeparator()
         toolbar.addAction(self.undo_stack.createUndoAction(self, "撤销"))
         toolbar.addAction(self.undo_stack.createRedoAction(self, "重做"))
 
+        self.add_annotation_shortcut = QAction(self)
+        self.add_annotation_shortcut.setShortcut("Ctrl+N")
+        self.add_annotation_shortcut.triggered.connect(self.start_add_box_mode)
+        self.addAction(self.add_annotation_shortcut)
+
         root = QWidget(self)
+        root.setObjectName("rootContainer")
         self.setCentralWidget(root)
         layout = QHBoxLayout(root)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setObjectName("mainSplitter")
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(8)
         layout.addWidget(splitter)
 
-        left = QWidget()
+        left = QFrame()
+        left.setObjectName("panelLeft")
+        left.setMinimumWidth(460)
         left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(10)
+
+        left_title = QLabel("文件列表")
+        left_title.setObjectName("sectionTitle")
+        left_layout.addWidget(left_title)
+
+        self.empty_guide_label = QLabel("空状态引导：先点击顶部“导入文件夹”，再在左侧列表选择样本。")
+        self.empty_guide_label.setObjectName("emptyGuide")
+        self.empty_guide_label.setWordWrap(True)
+        left_layout.addWidget(self.empty_guide_label)
 
         search_row = QHBoxLayout()
+        search_row.setSpacing(8)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("搜索：文件名/路径/类别")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setMinimumHeight(36)
         self.search_edit.textChanged.connect(self._rebuild_file_table)
         search_row.addWidget(self.search_edit)
 
         clear_btn = QPushButton("清空")
+        clear_btn.setMinimumHeight(36)
+        clear_btn.setMinimumWidth(68)
         clear_btn.clicked.connect(lambda: self.search_edit.setText(""))
         search_row.addWidget(clear_btn)
         left_layout.addLayout(search_row)
 
         filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
         self.sort_combo = QComboBox()
         self.sort_combo.addItems([
             "名称升序",
@@ -214,171 +266,565 @@ class MainWindow(QMainWindow):
             "是否标注（已标注在前）",
             "是否标注（未标注在前）",
         ])
+        self.sort_combo.setMinimumHeight(34)
         self.sort_combo.currentIndexChanged.connect(self._rebuild_file_table)
         filter_row.addWidget(self.sort_combo)
 
         self.mark_filter_combo = QComboBox()
         self.mark_filter_combo.addItems(["全部", "仅已标注", "仅未标注"])
+        self.mark_filter_combo.setMinimumHeight(34)
         self.mark_filter_combo.currentIndexChanged.connect(self._rebuild_file_table)
         filter_row.addWidget(self.mark_filter_combo)
 
         self.status_filter_combo = QComboBox()
         self.status_filter_combo.addItems(["全部状态", "通过", "警告", "错误", "未校验"])
+        self.status_filter_combo.setMinimumHeight(34)
         self.status_filter_combo.currentIndexChanged.connect(self._rebuild_file_table)
         filter_row.addWidget(self.status_filter_combo)
         left_layout.addLayout(filter_row)
 
-        self.file_table = QTableWidget(0, 6)
-        self.file_table.setHorizontalHeaderLabels(["文件名", "尺寸", "标签数", "类别", "状态", "路径"])
-        self.file_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.file_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.file_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.file_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.file_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.file_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.file_table = QTableWidget(0, 1)
+        self.file_table.setHorizontalHeaderLabels(["文件名"])
+        self.file_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.file_table.verticalHeader().setVisible(False)
         self.file_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.file_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.file_table.setAlternatingRowColors(True)
+        self.file_table.setShowGrid(False)
+        self.file_table.setWordWrap(False)
+        self.file_table.setMinimumHeight(360)
         self.file_table.currentCellChanged.connect(self.on_file_row_changed)
         left_layout.addWidget(self.file_table, stretch=6)
+        self.empty_guide_label.setVisible(True)
 
         anomaly_head = QHBoxLayout()
-        anomaly_head.addWidget(QLabel("异常分类"))
+        anomaly_head.setSpacing(8)
+        anomaly_label = QLabel("异常分类")
+        anomaly_label.setObjectName("sectionSubTitle")
+        anomaly_head.addWidget(anomaly_label)
 
         self.anomaly_combo = QComboBox()
+        self.anomaly_combo.setMinimumHeight(32)
         self.anomaly_combo.currentIndexChanged.connect(self._refresh_anomaly_list)
         anomaly_head.addWidget(self.anomaly_combo)
-
-        scan_anomaly_btn = QPushButton("扫描异常")
-        scan_anomaly_btn.clicked.connect(self.scan_anomalies)
-        anomaly_head.addWidget(scan_anomaly_btn)
         left_layout.addLayout(anomaly_head)
 
         self.anomaly_list = QListWidget()
+        self.anomaly_list.setAlternatingRowColors(True)
         self.anomaly_list.itemClicked.connect(self.on_anomaly_clicked)
         left_layout.addWidget(self.anomaly_list, stretch=3)
 
         splitter.addWidget(left)
 
-        middle = QWidget()
+        middle = QFrame()
+        middle.setObjectName("panelMiddle")
         middle_layout = QVBoxLayout(middle)
+        middle_layout.setContentsMargins(14, 14, 14, 14)
+        middle_layout.setSpacing(10)
+
+        middle_title = QLabel("图像预览")
+        middle_title.setObjectName("sectionTitle")
+        middle_layout.addWidget(middle_title)
 
         self.canvas = ImageCanvas()
         self.canvas.annotation_selected.connect(self.on_canvas_selection_changed)
         self.canvas.annotation_geometry_changed.connect(self.on_canvas_geometry_changed)
+        self.canvas.annotation_created.connect(self.on_canvas_annotation_created)
         self.canvas.delete_requested.connect(self.on_delete_annotation)
         middle_layout.addWidget(self.canvas, stretch=8)
 
         tip_label = QLabel(
-            "提示：拖动框体可移动，拖动边缘或角点可缩放，滚轮可缩放视图，按 Delete 可删除选中框。"
+            "提示：新增矩形=拖拽；新增旋转框=依次点击4个点；新增多边形=逐点点击，右键或回车完成。"
         )
+        tip_label.setObjectName("hintLabel")
+        tip_label.setWordWrap(True)
         middle_layout.addWidget(tip_label, stretch=0)
+
+        shortcut_label = QLabel("快捷键：Ctrl+O 导入 | F5 校验 | Ctrl+M 自动标注 | Ctrl+N 新增 | Delete 删除 | Ctrl+Z/Ctrl+Y 撤销重做")
+        shortcut_label.setObjectName("shortcutLabel")
+        shortcut_label.setWordWrap(True)
+        middle_layout.addWidget(shortcut_label, stretch=0)
 
         splitter.addWidget(middle)
 
-        right = QWidget()
+        right = QFrame()
+        right.setObjectName("panelRight")
+        right.setMinimumWidth(340)
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(14, 14, 14, 14)
+        right_layout.setSpacing(10)
 
-        self.annotation_table = QTableWidget(0, 8)
+        right_title = QLabel("标注明细")
+        right_title.setObjectName("sectionTitle")
+        right_layout.addWidget(right_title)
+
+        self.annotation_table = QTableWidget(0, 5)
         self.annotation_table.setHorizontalHeaderLabels(
-            ["序号", "类别ID", "类别名", "中心X", "中心Y", "宽度", "高度", "置信度"]
+            ["序号", "形状", "类别ID", "类别名", "点数"]
         )
-        self.annotation_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header_tips = [
+            "当前标注在图片中的行号",
+            "标注几何类型（矩形/旋转框/多边形）",
+            "YOLO 类别 ID",
+            "类别名称",
+            "点数量（矩形默认 4）",
+        ]
+        for i, tip in enumerate(header_tips):
+            header_item = self.annotation_table.horizontalHeaderItem(i)
+            if header_item is not None:
+                header_item.setToolTip(tip)
+        header = self.annotation_table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setMinimumSectionSize(56)
+        header.setDefaultSectionSize(88)
         self.annotation_table.verticalHeader().setVisible(False)
         self.annotation_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.annotation_table.setAlternatingRowColors(True)
+        self.annotation_table.setShowGrid(False)
+        self.annotation_table.setWordWrap(False)
         self.annotation_table.currentCellChanged.connect(self.on_table_selection_changed)
         right_layout.addWidget(self.annotation_table, stretch=5)
 
+        create_row = QHBoxLayout()
+        create_row.setSpacing(8)
+        create_label = QLabel("新增类型")
+        create_label.setObjectName("sectionSubTitle")
+        create_row.addWidget(create_label)
+
+        self.shape_mode_combo = QComboBox()
+        self.shape_mode_combo.addItems(["矩形", "旋转框", "多边形"])
+        self.shape_mode_combo.setMinimumHeight(34)
+        create_row.addWidget(self.shape_mode_combo)
+
+        self.add_btn = QPushButton("新增标注")
+        self.add_btn.setMinimumHeight(38)
+        self.add_btn.clicked.connect(self.start_add_box_mode)
+        create_row.addWidget(self.add_btn)
+        right_layout.addLayout(create_row)
+
+        self.center_marker_check = QCheckBox("显示中心标记（白圈+十字）")
+        self.center_marker_check.setChecked(True)
+        self.center_marker_check.toggled.connect(self.on_center_marker_toggled)
+        right_layout.addWidget(self.center_marker_check)
+        self.canvas.set_center_marker_visible(self.center_marker_check.isChecked())
+
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
         self.class_btn = QPushButton("修改类别")
+        self.class_btn.setMinimumHeight(38)
         self.class_btn.clicked.connect(self.on_change_class)
         btn_row.addWidget(self.class_btn)
 
-        self.delete_btn = QPushButton("删除框")
+        self.delete_btn = QPushButton("删除当前")
+        self.delete_btn.setMinimumHeight(38)
         self.delete_btn.clicked.connect(self.delete_selected_box)
         btn_row.addWidget(self.delete_btn)
+
+        self.batch_delete_btn = QPushButton("批量删同类")
+        self.batch_delete_btn.setMinimumHeight(38)
+        self.batch_delete_btn.clicked.connect(self.batch_delete_same_class)
+        btn_row.addWidget(self.batch_delete_btn)
         right_layout.addLayout(btn_row)
 
         self.issue_text = QTextEdit()
         self.issue_text.setReadOnly(True)
+        self.issue_text.setPlaceholderText("此处显示当前文件的校验信息。")
         right_layout.addWidget(self.issue_text, stretch=4)
 
         splitter.addWidget(right)
-        splitter.setSizes([640, 860, 420])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 5)
+        splitter.setStretchFactor(2, 2)
+        splitter.setSizes([516, 860, 344])
 
         self._refresh_anomaly_combo()
 
-    def _apply_style(self) -> None:
-        self.setStyleSheet(
-            """
+    def _build_light_stylesheet(self) -> str:
+        return """
             QMainWindow {
-                background: #f4f7fb;
+                background: #edf2f7;
                 font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI";
+                color: #0f172a;
             }
-            QToolBar {
-                background: #1f2937;
+            QWidget#rootContainer {
+                background: transparent;
+            }
+            QStatusBar {
+                background: #ffffff;
+                color: #475569;
+                border-top: 1px solid #e2e8f0;
+                font-size: 12px;
+                padding-left: 8px;
+            }
+            QToolBar#mainToolbar {
+                background: #0f172a;
                 border: none;
                 spacing: 8px;
-                padding: 6px;
+                padding: 8px 10px;
+            }
+            QToolBar#mainToolbar::separator {
+                background: #334155;
+                width: 1px;
+                margin: 6px 8px;
             }
             QToolButton {
-                color: #f8fafc;
-                background: #374151;
-                border-radius: 6px;
-                padding: 6px 10px;
+                color: #e2e8f0;
+                background: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 7px 12px;
+                min-height: 34px;
+                min-width: 82px;
+                font-size: 13px;
+                font-weight: 600;
             }
             QToolButton:hover {
-                background: #4b5563;
+                background: #334155;
+                border-color: #475569;
             }
-            QListWidget, QTableWidget, QTextEdit, QLineEdit, QComboBox {
-                background: white;
-                border: 1px solid #d1d5db;
+            QToolButton:pressed {
+                background: #475569;
+            }
+            QFrame#panelLeft, QFrame#panelMiddle, QFrame#panelRight {
+                background: #ffffff;
+                border: 1px solid #dbe3ee;
+                border-radius: 12px;
+            }
+            QSplitter::handle {
+                background: transparent;
+            }
+            QSplitter::handle:hover {
+                background: #d5deeb;
+                border-radius: 4px;
+            }
+            QLabel#sectionTitle {
+                font-size: 15px;
+                font-weight: 700;
+                color: #0f172a;
+                padding-left: 2px;
+            }
+            QLabel#sectionSubTitle {
+                font-size: 13px;
+                font-weight: 600;
+                color: #334155;
+                padding-left: 2px;
+            }
+            QLabel#hintLabel {
+                font-size: 12px;
+                color: #475569;
+                padding: 2px 2px 0 2px;
+            }
+            QLabel#shortcutLabel {
+                font-size: 12px;
+                color: #0f766e;
+                background: #ecfeff;
+                border: 1px solid #bae6fd;
                 border-radius: 8px;
+                padding: 6px 8px;
             }
-            QLabel {
-                color: #111827;
+            QLabel#emptyGuide {
+                font-size: 12px;
+                color: #475569;
+                background: #f8fafc;
+                border: 1px dashed #cbd5e1;
+                border-radius: 8px;
+                padding: 6px 8px;
+            }
+            QCheckBox {
+                color: #334155;
+                font-size: 12px;
+                spacing: 6px;
+                padding: 2px 2px;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+            }
+            QLineEdit, QComboBox {
+                background: #f8fafc;
+                border: 1px solid #d6deea;
+                border-radius: 8px;
+                padding: 0 10px;
+                color: #0f172a;
+                font-size: 13px;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #0f766e;
+                background: #ffffff;
             }
             QPushButton {
                 background: #0f766e;
-                color: white;
+                color: #f8fafc;
                 border: none;
-                border-radius: 6px;
-                padding: 8px;
+                border-radius: 8px;
+                padding: 0 14px;
+                min-height: 34px;
+                font-size: 13px;
+                font-weight: 600;
             }
             QPushButton:hover {
-                background: #115e59;
+                background: #0d9488;
             }
-            """
-        )
+            QPushButton:pressed {
+                background: #0f766e;
+            }
+            QPushButton:disabled {
+                background: #9aa9bc;
+                color: #e2e8f0;
+            }
+            QTableWidget, QListWidget, QTextEdit {
+                background: #ffffff;
+                border: 1px solid #d8e0eb;
+                border-radius: 10px;
+                color: #0f172a;
+                alternate-background-color: #f8fbff;
+                selection-background-color: #c8f2e9;
+                selection-color: #0f5132;
+                outline: none;
+                font-size: 12px;
+            }
+            QTableWidget {
+                gridline-color: #eef2f7;
+            }
+            QHeaderView::section {
+                background: #f3f6fb;
+                color: #334155;
+                border: none;
+                border-bottom: 1px solid #e2e8f0;
+                padding: 8px 10px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c7d2e1;
+                border-radius: 5px;
+                min-height: 26px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #94a3b8;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+                border: none;
+            }
+        """
+
+    def _build_dark_stylesheet(self) -> str:
+        return """
+            QMainWindow {
+                background: #0b1220;
+                font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI";
+                color: #e2e8f0;
+            }
+            QWidget#rootContainer {
+                background: transparent;
+            }
+            QStatusBar {
+                background: #0f172a;
+                color: #94a3b8;
+                border-top: 1px solid #1e293b;
+                font-size: 12px;
+                padding-left: 8px;
+            }
+            QToolBar#mainToolbar {
+                background: #020617;
+                border: none;
+                spacing: 8px;
+                padding: 8px 10px;
+            }
+            QToolBar#mainToolbar::separator {
+                background: #1e293b;
+                width: 1px;
+                margin: 6px 8px;
+            }
+            QToolButton {
+                color: #e2e8f0;
+                background: #111827;
+                border: 1px solid #1f2937;
+                border-radius: 8px;
+                padding: 7px 12px;
+                min-height: 34px;
+                min-width: 82px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QToolButton:hover {
+                background: #1f2937;
+                border-color: #334155;
+            }
+            QToolButton:pressed {
+                background: #334155;
+            }
+            QFrame#panelLeft, QFrame#panelMiddle, QFrame#panelRight {
+                background: #111827;
+                border: 1px solid #1f2937;
+                border-radius: 12px;
+            }
+            QSplitter::handle {
+                background: transparent;
+            }
+            QSplitter::handle:hover {
+                background: #1f2937;
+                border-radius: 4px;
+            }
+            QLabel#sectionTitle {
+                font-size: 15px;
+                font-weight: 700;
+                color: #f8fafc;
+                padding-left: 2px;
+            }
+            QLabel#sectionSubTitle {
+                font-size: 13px;
+                font-weight: 600;
+                color: #cbd5e1;
+                padding-left: 2px;
+            }
+            QLabel#hintLabel {
+                font-size: 12px;
+                color: #94a3b8;
+                padding: 2px 2px 0 2px;
+            }
+            QLabel#shortcutLabel {
+                font-size: 12px;
+                color: #99f6e4;
+                background: #0b1d2b;
+                border: 1px solid #164e63;
+                border-radius: 8px;
+                padding: 6px 8px;
+            }
+            QLabel#emptyGuide {
+                font-size: 12px;
+                color: #94a3b8;
+                background: #0f172a;
+                border: 1px dashed #334155;
+                border-radius: 8px;
+                padding: 6px 8px;
+            }
+            QCheckBox {
+                color: #cbd5e1;
+                font-size: 12px;
+                spacing: 6px;
+                padding: 2px 2px;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+            }
+            QLineEdit, QComboBox {
+                background: #0f172a;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 0 10px;
+                color: #e2e8f0;
+                font-size: 13px;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #14b8a6;
+                background: #111827;
+            }
+            QPushButton {
+                background: #115e59;
+                color: #f0fdfa;
+                border: none;
+                border-radius: 8px;
+                padding: 0 14px;
+                min-height: 34px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #0f766e;
+            }
+            QPushButton:pressed {
+                background: #134e4a;
+            }
+            QPushButton:disabled {
+                background: #475569;
+                color: #94a3b8;
+            }
+            QTableWidget, QListWidget, QTextEdit {
+                background: #0f172a;
+                border: 1px solid #273449;
+                border-radius: 10px;
+                color: #e2e8f0;
+                alternate-background-color: #111f35;
+                selection-background-color: #164e63;
+                selection-color: #e0f2fe;
+                outline: none;
+                font-size: 12px;
+            }
+            QTableWidget {
+                gridline-color: #1e293b;
+            }
+            QHeaderView::section {
+                background: #111827;
+                color: #cbd5e1;
+                border: none;
+                border-bottom: 1px solid #273449;
+                padding: 8px 10px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #334155;
+                border-radius: 5px;
+                min-height: 26px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #475569;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+                border: none;
+            }
+        """
+
+    def _apply_style(self) -> None:
+        if self.theme_mode == "dark":
+            self.setStyleSheet(self._build_dark_stylesheet())
+        else:
+            self.setStyleSheet(self._build_light_stylesheet())
+
+        if self.theme_toggle_action is not None:
+            should_checked = self.theme_mode == "dark"
+            if self.theme_toggle_action.isChecked() != should_checked:
+                self.theme_toggle_action.blockSignals(True)
+                self.theme_toggle_action.setChecked(should_checked)
+                self.theme_toggle_action.blockSignals(False)
+
+    def toggle_theme(self, checked: bool) -> None:
+        self.theme_mode = "dark" if checked else "light"
+        self._apply_style()
+        self.statusBar().showMessage("已切换为极简暗色主题。" if checked else "已切换为浅色主题。", 2500)
 
     def _pick_folders(self) -> list[Path]:
-        folders: list[Path] = []
         start_dir = str(self.dataset_roots[0]) if self.dataset_roots else ""
-
-        while True:
-            selected = QFileDialog.getExistingDirectory(
-                self,
-                "选择数据集文件夹（取消结束选择）",
-                start_dir,
-            )
-            if not selected:
-                break
-
-            p = Path(selected).resolve()
-            if p not in folders:
-                folders.append(p)
-
-            cont = QMessageBox.question(
-                self,
-                "继续添加",
-                "是否继续添加下一个文件夹？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if cont != QMessageBox.StandardButton.Yes:
-                break
-
-        return folders
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "选择数据集文件夹",
+            start_dir,
+        )
+        if not selected:
+            return []
+        return [Path(selected).resolve()]
 
     def import_folders(self, _checked: bool = False) -> None:
         folders = self._pick_folders()
@@ -571,20 +1017,10 @@ class MainWindow(QMainWindow):
         return self.image_size_cache.get(idx, "-")
 
     def _set_file_table_row(self, row: int, idx: int) -> None:
-        values = [
-            self._display_file_name(idx),
-            self._item_size_text(idx),
-            self._item_tag_count_text(idx),
-            self._item_class_text(idx),
-            self._item_status(idx),
-            self._item_path_text(idx),
-        ]
-        for col, value in enumerate(values):
-            cell = QTableWidgetItem(value)
-            cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            if col == 0:
-                cell.setData(Qt.ItemDataRole.UserRole, idx)
-            self.file_table.setItem(row, col, cell)
+        cell = QTableWidgetItem(self._display_file_name(idx))
+        cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        cell.setData(Qt.ItemDataRole.UserRole, idx)
+        self.file_table.setItem(row, 0, cell)
 
     def _refresh_visible_row_for_index(self, idx: int) -> None:
         if idx not in self.visible_indices:
@@ -675,6 +1111,9 @@ class MainWindow(QMainWindow):
             if self._matches_filters(i, keyword, mark_filter, status_filter)
         ]
         self.visible_indices = self._sort_indices(filtered, sort_mode)
+
+        if hasattr(self, "empty_guide_label"):
+            self.empty_guide_label.setVisible(len(self.items) == 0)
 
         self._updating_ui = True
         try:
@@ -788,13 +1227,6 @@ class MainWindow(QMainWindow):
 
         self._refresh_anomaly_combo()
 
-    def scan_anomalies(self) -> None:
-        if not self.items:
-            QMessageBox.information(self, "未导入数据集", "请先导入数据集。")
-            return
-        self._rebuild_anomaly_index(full_scan=True)
-        self._rebuild_file_table()
-        QMessageBox.information(self, "扫描完成", "异常分类面板已更新。")
 
     def _refresh_anomaly_list(self) -> None:
         code = self.anomaly_combo.currentData()
@@ -878,22 +1310,41 @@ class MainWindow(QMainWindow):
         return checked
 
     def _refresh_annotation_table(self, selected_index: int = -1) -> None:
+        shape_map = {"bbox": "矩形", "rotated": "旋转框", "polygon": "多边形"}
         self.annotation_table.setRowCount(len(self.current_annotations))
         for row, ann in enumerate(self.current_annotations):
             self._ensure_class_name(ann.class_id)
+            point_count = ann.point_count() if hasattr(ann, "point_count") else (len(ann.points) if ann.points else 4)
             values = [
                 str(row),
+                shape_map.get(ann.shape_type, ann.shape_type),
                 str(ann.class_id),
                 self.class_names[ann.class_id],
-                f"{ann.x_center:.6f}",
-                f"{ann.y_center:.6f}",
-                f"{ann.width:.6f}",
-                f"{ann.height:.6f}",
-                f"{ann.confidence:.4f}" if ann.confidence is not None else "-",
+                str(point_count),
             ]
+            detail_tooltip = "\n".join(
+                [
+                    f"序号: {row}",
+                    f"形状: {shape_map.get(ann.shape_type, ann.shape_type)}",
+                    f"类别ID: {ann.class_id}",
+                    f"类别名: {self.class_names[ann.class_id]}",
+                    f"中心X: {ann.x_center:.6f}",
+                    f"中心Y: {ann.y_center:.6f}",
+                    f"宽度: {ann.width:.6f}",
+                    f"高度: {ann.height:.6f}",
+                    f"点数: {point_count}",
+                    f"置信度: {ann.confidence:.4f}" if ann.confidence is not None else "置信度: -",
+                ]
+            )
+            cls_color = QColor(class_color(ann.class_id))
+            cls_color.setAlpha(58)
             for col, text in enumerate(values):
                 table_item = QTableWidgetItem(text)
                 table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table_item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
+                table_item.setToolTip(detail_tooltip)
+                if col in (2, 3):
+                    table_item.setBackground(QBrush(cls_color))
                 self.annotation_table.setItem(row, col, table_item)
 
         if 0 <= selected_index < len(self.current_annotations):
@@ -926,6 +1377,62 @@ class MainWindow(QMainWindow):
             code_text = code_map.get(issue.code, issue.code)
             lines.append(f"[{severity_text}] {code_text}{line_hint}: {issue.message}")
         self.issue_text.setText("\n".join(lines))
+    def on_center_marker_toggled(self, checked: bool) -> None:
+        self.canvas.set_center_marker_visible(checked)
+        self.statusBar().showMessage("已显示中心标记。" if checked else "已隐藏中心标记。", 1800)
+
+    def start_add_box_mode(self) -> None:
+        if self.current_index < 0:
+            QMessageBox.information(self, "未选择", "请先选择一个样本。")
+            return
+
+        default_class = 0
+        current_row = self.annotation_table.currentRow()
+        if 0 <= current_row < len(self.current_annotations):
+            default_class = self.current_annotations[current_row].class_id
+
+        class_id, ok = QInputDialog.getInt(
+            self,
+            "新增标注",
+            "请输入新增类别ID：",
+            value=default_class,
+            min=0,
+            max=100000,
+        )
+        if not ok:
+            return
+
+        self._ensure_class_name(class_id)
+        mode_text = self.shape_mode_combo.currentText() if hasattr(self, "shape_mode_combo") else "矩形"
+        shape_mode = {"矩形": "bbox", "旋转框": "rotated", "多边形": "polygon"}.get(mode_text, "bbox")
+        self.canvas.start_create_mode(class_id, shape_mode)
+
+        if shape_mode == "bbox":
+            msg = "新增矩形：在图片中按住左键拖动并松开完成，Esc 取消。"
+        elif shape_mode == "rotated":
+            msg = "新增旋转框：依次点击4个角点，或按 Enter 完成，Esc 取消。"
+        else:
+            msg = "新增多边形：逐点点击，右键/Enter 完成，Esc 取消。"
+        self.statusBar().showMessage(msg)
+
+    def on_canvas_annotation_created(self, ann_obj: object) -> None:
+        if self.current_index < 0:
+            return
+        if not isinstance(ann_obj, Annotation):
+            return
+
+        new_ann = copy.deepcopy(ann_obj)
+        self._ensure_class_name(new_ann.class_id)
+        insert_index = len(self.current_annotations)
+        cmd = AddAnnotationCommand(
+            annotations=self.current_annotations,
+            index=insert_index,
+            value=new_ann,
+            on_apply=self._on_annotations_applied,
+        )
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage("新增标注已添加并写入标签文件。")
+
     def on_table_selection_changed(self, current_row: int, *_args) -> None:
         if self._updating_ui:
             return
@@ -996,6 +1503,39 @@ class MainWindow(QMainWindow):
             return
         cmd = DeleteAnnotationCommand(self.current_annotations, index, self._on_annotations_applied)
         self.undo_stack.push(cmd)
+
+    def batch_delete_same_class(self) -> None:
+        if self.current_index < 0 or not self.current_annotations:
+            QMessageBox.information(self, "无可删标注", "当前图片没有可批量删除的标注。")
+            return
+
+        default_class = 0
+        row = self.annotation_table.currentRow()
+        if 0 <= row < len(self.current_annotations):
+            default_class = self.current_annotations[row].class_id
+
+        class_id, ok = QInputDialog.getInt(
+            self,
+            "批量删除同类",
+            "请输入要删除的类别ID：",
+            value=default_class,
+            min=0,
+            max=100000,
+        )
+        if not ok:
+            return
+
+        indices = [i for i, ann in enumerate(self.current_annotations) if ann.class_id == class_id]
+        if not indices:
+            QMessageBox.information(self, "无匹配", f"当前图片中没有类别ID={class_id}的标注。")
+            return
+
+        self.undo_stack.beginMacro(f"批量删除类别 {class_id}")
+        for idx in reversed(indices):
+            self.undo_stack.push(DeleteAnnotationCommand(self.current_annotations, idx, self._on_annotations_applied))
+        self.undo_stack.endMacro()
+        self.statusBar().showMessage(f"已批量删除 {len(indices)} 个类别 {class_id} 的标注。", 2500)
+
 
     def _on_annotations_applied(self, selected_index: int) -> None:
         self._updating_ui = True
@@ -1463,3 +2003,55 @@ def run() -> None:
     window = MainWindow()
     window.show()
     app.exec()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
