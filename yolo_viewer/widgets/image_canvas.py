@@ -348,8 +348,8 @@ def _draw_label_and_center(
         painter.setPen(QPen(Qt.GlobalColor.white, line_w))
         painter.drawEllipse(QPointF(cx, cy), marker_radius, marker_radius)
         painter.setPen(QPen(color, line_w))
-        painter.drawLine(cx - cross_half, cy, cx + cross_half, cy)
-        painter.drawLine(cx, cy - cross_half, cx, cy + cross_half)
+        painter.drawLine(QPointF(cx - cross_half, cy), QPointF(cx + cross_half, cy))
+        painter.drawLine(QPointF(cx, cy - cross_half), QPointF(cx, cy + cross_half))
 
 
 class ImageCanvas(QGraphicsView):
