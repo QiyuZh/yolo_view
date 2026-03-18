@@ -37,7 +37,13 @@ def parse_yolo_label(label_path: Path) -> tuple[list[Annotation], list[Validatio
         issues.append(ValidationIssue(code="label_missing", message="标签文件不存在。"))
         return annotations, issues
 
-    content = label_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    try:
+        content = label_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception as exc:
+        issues.append(
+            ValidationIssue(code="label_read_error", message=f"标签文件读取失败：{exc}")
+        )
+        return annotations, issues
     if not content:
         issues.append(ValidationIssue(code="empty_label", message="标签文件为空。", severity="warning"))
         return annotations, issues
@@ -284,9 +290,14 @@ def validate_item(item: DatasetItem) -> FileValidation:
         )
         return result
 
-    annotations, issues = parse_yolo_label(item.label_path)
-    result.annotations = annotations
-    result.issues.extend(issues)
+    try:
+        annotations, issues = parse_yolo_label(item.label_path)
+        result.annotations = annotations
+        result.issues.extend(issues)
+    except Exception as exc:
+        result.issues.append(
+            ValidationIssue(code="label_read_error", message=f"标签解析失败：{exc}")
+        )
     return result
 
 

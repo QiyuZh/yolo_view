@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from collections import OrderedDict
+import os
 from pathlib import Path
 
 from .models import DatasetItem
@@ -65,22 +66,64 @@ def _is_ignored_path(root: Path, path: Path) -> bool:
         rel_parts = [p.lower() for p in path.parts]
     return any(seg in IGNORED_DIR_SEGMENTS for seg in rel_parts)
 
+
+def _iter_files_safe(root_dir: Path):
+    """Yield files under root_dir while ignoring access errors."""
+    root_text = str(root_dir)
+
+    def _on_error(_exc: OSError) -> None:
+        # Ignore unreadable folders/files and continue scanning.
+        return None
+
+    for current_root, dir_names, file_names in os.walk(
+        root_text,
+        topdown=True,
+        onerror=_on_error,
+        followlinks=False,
+    ):
+        dir_names[:] = [d for d in dir_names if d.lower() not in IGNORED_DIR_SEGMENTS]
+        for file_name in file_names:
+            try:
+                yield Path(current_root) / file_name
+            except Exception:
+                continue
+
+
+def _safe_relative(path: Path, root: Path) -> Path | None:
+    try:
+        return path.relative_to(root)
+    except Exception:
+        return None
+
+
 def scan_dataset(root_dir: Path) -> list[DatasetItem]:
     """Scan folder recursively and build image/label pairs lazily."""
     image_map: dict[str, list[Path]] = {}
     label_map: dict[str, list[Path]] = {}
 
-    for file_path in root_dir.rglob("*"):
-        if not file_path.is_file():
+    for file_path in _iter_files_safe(root_dir):
+        try:
+            if not file_path.is_file():
+                continue
+        except Exception:
             continue
         if _is_ignored_path(root_dir, file_path):
             continue
-        suffix = file_path.suffix.lower()
+        try:
+            suffix = file_path.suffix.lower()
+        except Exception:
+            continue
         if suffix in IMAGE_SUFFIXES:
-            key = _normalize_key(root_dir, file_path, is_label=False)
+            try:
+                key = _normalize_key(root_dir, file_path, is_label=False)
+            except Exception:
+                key = file_path.stem
             image_map.setdefault(key, []).append(file_path)
         elif suffix == LABEL_SUFFIX:
-            key = _normalize_key(root_dir, file_path, is_label=True)
+            try:
+                key = _normalize_key(root_dir, file_path, is_label=True)
+            except Exception:
+                key = file_path.stem
             label_map.setdefault(key, []).append(file_path)
 
     all_images = sorted({p for paths in image_map.values() for p in paths})
@@ -114,8 +157,8 @@ def scan_dataset(root_dir: Path) -> list[DatasetItem]:
                 key=key,
                 image_path=image_path,
                 label_path=label_path,
-                image_rel=image_path.relative_to(root_dir) if image_path else None,
-                label_rel=label_path.relative_to(root_dir) if label_path else None,
+                image_rel=_safe_relative(image_path, root_dir) if image_path else None,
+                label_rel=_safe_relative(label_path, root_dir) if label_path else None,
             )
         )
 
@@ -257,8 +300,3 @@ def load_pixmap(path: Path):
         return fallback
 
     return QPixmap()
-
-
-
-
-

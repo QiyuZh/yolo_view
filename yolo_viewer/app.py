@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -54,6 +55,7 @@ ANOMALY_TYPES: list[tuple[str, str]] = [
     ("label_missing", "缺失标签"),
     ("image_missing", "缺失图片"),
     ("empty_label", "空标签"),
+    ("label_read_error", "标签读取失败"),
 ]
 
 
@@ -861,38 +863,58 @@ class MainWindow(QMainWindow):
 
         added_roots = 0
         added_items = 0
+        failed_roots: list[str] = []
 
         progress = QProgressDialog("正在扫描数据集文件夹...", "取消", 0, len(valid_folders), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
 
-        for i, root in enumerate(valid_folders, start=1):
-            if progress.wasCanceled():
-                break
+        try:
+            for i, root in enumerate(valid_folders, start=1):
+                if progress.wasCanceled():
+                    break
 
-            if root in self.dataset_roots:
+                if root in self.dataset_roots:
+                    progress.setValue(i)
+                    QApplication.processEvents()
+                    continue
+
+                try:
+                    scanned_items = scan_dataset(root)
+                except Exception as exc:
+                    traceback.print_exc()
+                    failed_roots.append(f"{root}: {exc}")
+                    progress.setValue(i)
+                    QApplication.processEvents()
+                    continue
+
+                for item in scanned_items:
+                    self.items.append(item)
+                    self.item_roots.append(root)
+                    added_items += 1
+
+                self.dataset_roots.append(root)
+                added_roots += 1
                 progress.setValue(i)
                 QApplication.processEvents()
-                continue
+        finally:
+            progress.close()
 
-            scanned_items = scan_dataset(root)
-            for item in scanned_items:
-                self.items.append(item)
-                self.item_roots.append(root)
-                added_items += 1
+        try:
+            self.class_names = self._merge_class_names(self.dataset_roots)
+            self._rebuild_file_table()
+            self._rebuild_anomaly_index(full_scan=False)
 
-            self.dataset_roots.append(root)
-            added_roots += 1
-            progress.setValue(i)
-            QApplication.processEvents()
+            if self.visible_indices and self.current_index < 0:
+                self._select_global_index(self.visible_indices[0])
+        except Exception as exc:
+            traceback.print_exc()
+            QMessageBox.critical(self, "导入失败", f"导入后刷新界面失败：{exc}")
+            return
 
-        progress.close()
-
-        self.class_names = self._merge_class_names(self.dataset_roots)
-        self._rebuild_file_table()
-        self._rebuild_anomaly_index(full_scan=False)
-
-        if self.visible_indices and self.current_index < 0:
-            self._select_global_index(self.visible_indices[0])
+        if failed_roots:
+            details = "\n".join(failed_roots[:5])
+            more = "\n..." if len(failed_roots) > 5 else ""
+            QMessageBox.warning(self, "部分目录扫描失败", f"以下目录已跳过：\n{details}{more}")
 
         self.statusBar().showMessage(
             f"已加载 {len(self.items)} 个样本，来自 {len(self.dataset_roots)} 个文件夹，本次新增 {added_items} 个样本。"
@@ -900,10 +922,14 @@ class MainWindow(QMainWindow):
 
         if added_roots == 0:
             QMessageBox.information(self, "提示", "所选文件夹均已导入。")
+
     def _load_class_names(self, root: Path) -> list[str]:
         classes_txt = root / "classes.txt"
         if classes_txt.exists():
-            names = [line.strip() for line in classes_txt.read_text(encoding="utf-8", errors="ignore").splitlines()]
+            try:
+                names = [line.strip() for line in classes_txt.read_text(encoding="utf-8", errors="ignore").splitlines()]
+            except Exception:
+                names = []
             names = [n for n in names if n]
             if names:
                 return names
@@ -2003,55 +2029,3 @@ def run() -> None:
     window = MainWindow()
     window.show()
     app.exec()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
