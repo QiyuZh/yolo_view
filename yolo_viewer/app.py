@@ -424,6 +424,11 @@ class MainWindow(QMainWindow):
         self.class_btn.clicked.connect(self.on_change_class)
         btn_row.addWidget(self.class_btn)
 
+        self.class_name_btn = QPushButton("编辑类别名")
+        self.class_name_btn.setMinimumHeight(38)
+        self.class_name_btn.clicked.connect(self.on_edit_class_name)
+        btn_row.addWidget(self.class_name_btn)
+
         self.delete_btn = QPushButton("删除当前")
         self.delete_btn.setMinimumHeight(38)
         self.delete_btn.clicked.connect(self.delete_selected_box)
@@ -971,6 +976,30 @@ class MainWindow(QMainWindow):
         while len(self.class_names) <= class_id:
             self.class_names.append(f"cls_{len(self.class_names)}")
 
+    def _save_class_names_for_root(self, root: Path) -> bool:
+        classes_txt = root / "classes.txt"
+        normalized = [name.strip() if name.strip() else f"cls_{idx}" for idx, name in enumerate(self.class_names)]
+        content = "\n".join(normalized)
+        if content:
+            content += "\n"
+        try:
+            classes_txt.write_text(content, encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    def _persist_class_names(self) -> tuple[int, int]:
+        if not self.dataset_roots:
+            return 0, 0
+        ok_count = 0
+        fail_count = 0
+        for root in self.dataset_roots:
+            if self._save_class_names_for_root(root):
+                ok_count += 1
+            else:
+                fail_count += 1
+        return ok_count, fail_count
+
     def _display_file_name(self, idx: int) -> str:
         root = self.item_roots[idx]
         return f"{root.name}/{self.items[idx].display_name()}"
@@ -1438,6 +1467,20 @@ class MainWindow(QMainWindow):
             return
 
         self._ensure_class_name(class_id)
+        current_name = self.class_names[class_id]
+        if current_name == f"cls_{class_id}":
+            new_name, ok_name = QInputDialog.getText(
+                self,
+                "设置类别名",
+                f"类别ID {class_id} 的名称（回车保留默认）：",
+                text=current_name,
+            )
+            if ok_name:
+                new_name = new_name.strip()
+                if new_name:
+                    self.class_names[class_id] = new_name
+                    self._persist_class_names()
+
         mode_text = self.shape_mode_combo.currentText() if hasattr(self, "shape_mode_combo") else "矩形"
         shape_mode = {"矩形": "bbox", "旋转框": "rotated", "多边形": "polygon"}.get(mode_text, "bbox")
         self.canvas.start_create_mode(class_id, shape_mode)
@@ -1526,6 +1569,63 @@ class MainWindow(QMainWindow):
             on_apply=self._on_annotations_applied,
         )
         self.undo_stack.push(cmd)
+
+
+    def on_edit_class_name(self) -> None:
+        if self.current_index < 0:
+            QMessageBox.information(self, "未选择", "请先导入并选择一个样本。")
+            return
+
+        default_class = 0
+        row = self.annotation_table.currentRow()
+        if 0 <= row < len(self.current_annotations):
+            default_class = self.current_annotations[row].class_id
+
+        class_id, ok = QInputDialog.getInt(
+            self,
+            "编辑类别名",
+            "类别ID：",
+            value=default_class,
+            min=0,
+            max=100000,
+        )
+        if not ok:
+            return
+
+        self._ensure_class_name(class_id)
+        current_name = self.class_names[class_id]
+        new_name, ok = QInputDialog.getText(
+            self,
+            "编辑类别名",
+            f"类别ID {class_id} 的类别名：",
+            text=current_name,
+        )
+        if not ok:
+            return
+
+        new_name = new_name.strip()
+        if not new_name:
+            QMessageBox.warning(self, "无效名称", "类别名不能为空。")
+            return
+        if new_name == current_name:
+            return
+
+        self.class_names[class_id] = new_name
+        selected_row = self.annotation_table.currentRow()
+        self._refresh_annotation_table(selected_row)
+        if self.current_index >= 0:
+            self.canvas.update_annotations(self.current_annotations, self.class_names, selected_row)
+            self._refresh_visible_row_for_index(self.current_index)
+
+        ok_count, fail_count = self._persist_class_names()
+        if fail_count > 0:
+            QMessageBox.warning(
+                self,
+                "部分保存失败",
+                f"已写入 {ok_count} 个数据集，失败 {fail_count} 个。",
+            )
+        else:
+            self.statusBar().showMessage(f"类别ID {class_id} 已更新为：{new_name}", 2500)
 
     def delete_selected_box(self) -> None:
         row = self.annotation_table.currentRow()
