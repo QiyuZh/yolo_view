@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QFileDialog,
     QHBoxLayout,
@@ -24,6 +26,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QTableWidget,
@@ -416,29 +419,45 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.center_marker_check)
         self.canvas.set_center_marker_visible(self.center_marker_check.isChecked())
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        btn_row_top = QHBoxLayout()
+        btn_row_top.setSpacing(8)
 
-        self.class_btn = QPushButton("修改类别")
+        self.class_btn = QPushButton("改类别")
         self.class_btn.setMinimumHeight(38)
+        self.class_btn.setMinimumWidth(94)
+        self.class_btn.setToolTip("修改当前标注的类别")
+        self.class_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.class_btn.clicked.connect(self.on_change_class)
-        btn_row.addWidget(self.class_btn)
+        btn_row_top.addWidget(self.class_btn)
 
-        self.class_name_btn = QPushButton("编辑类别名")
+        self.class_name_btn = QPushButton("改类名")
         self.class_name_btn.setMinimumHeight(38)
+        self.class_name_btn.setMinimumWidth(94)
+        self.class_name_btn.setToolTip("编辑类别名称（可输入类别ID或类别名）")
+        self.class_name_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.class_name_btn.clicked.connect(self.on_edit_class_name)
-        btn_row.addWidget(self.class_name_btn)
+        btn_row_top.addWidget(self.class_name_btn)
+        right_layout.addLayout(btn_row_top)
 
-        self.delete_btn = QPushButton("删除当前")
+        btn_row_bottom = QHBoxLayout()
+        btn_row_bottom.setSpacing(8)
+
+        self.delete_btn = QPushButton("删当前")
         self.delete_btn.setMinimumHeight(38)
+        self.delete_btn.setMinimumWidth(94)
+        self.delete_btn.setToolTip("删除当前选中的标注")
+        self.delete_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.delete_btn.clicked.connect(self.delete_selected_box)
-        btn_row.addWidget(self.delete_btn)
+        btn_row_bottom.addWidget(self.delete_btn)
 
-        self.batch_delete_btn = QPushButton("批量删同类")
+        self.batch_delete_btn = QPushButton("删同类")
         self.batch_delete_btn.setMinimumHeight(38)
+        self.batch_delete_btn.setMinimumWidth(94)
+        self.batch_delete_btn.setToolTip("按类别ID批量删除当前图片中的标注")
+        self.batch_delete_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.batch_delete_btn.clicked.connect(self.batch_delete_same_class)
-        btn_row.addWidget(self.batch_delete_btn)
-        right_layout.addLayout(btn_row)
+        btn_row_bottom.addWidget(self.batch_delete_btn)
+        right_layout.addLayout(btn_row_bottom)
 
         self.issue_text = QTextEdit()
         self.issue_text.setReadOnly(True)
@@ -488,7 +507,7 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
                 padding: 7px 12px;
                 min-height: 34px;
-                min-width: 82px;
+                min-width: 96px;
                 font-size: 13px;
                 font-weight: 600;
             }
@@ -664,7 +683,7 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
                 padding: 7px 12px;
                 min-height: 34px;
-                min-width: 82px;
+                min-width: 96px;
                 font-size: 13px;
                 font-weight: 600;
             }
@@ -999,6 +1018,117 @@ class MainWindow(QMainWindow):
             else:
                 fail_count += 1
         return ok_count, fail_count
+
+    def _find_class_id_by_name(self, name: str) -> int | None:
+        target = name.strip()
+        if not target:
+            return None
+
+        for idx, class_name in enumerate(self.class_names):
+            if class_name == target:
+                return idx
+
+        low = target.lower()
+        for idx, class_name in enumerate(self.class_names):
+            if class_name.lower() == low:
+                return idx
+
+        return None
+
+    def _prompt_text_dialog(
+        self,
+        title: str,
+        label: str,
+        default_text: str = "",
+        placeholder: str = "",
+    ) -> str | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setModal(True)
+        dialog.setMinimumWidth(460)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        hint = QLabel(label)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        editor = QLineEdit()
+        editor.setMinimumHeight(36)
+        editor.setText(default_text)
+        if placeholder:
+            editor.setPlaceholderText(placeholder)
+        editor.selectAll()
+        layout.addWidget(editor)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if ok_btn is not None:
+            ok_btn.setText("确定")
+            ok_btn.setMinimumWidth(94)
+        if cancel_btn is not None:
+            cancel_btn.setText("取消")
+            cancel_btn.setMinimumWidth(94)
+
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        value = editor.text().strip()
+        return value if value else None
+
+    def _resolve_class_token(self, token: str, create_if_missing_name: bool = True) -> int | None:
+        raw = token.strip()
+        if not raw:
+            return None
+
+        found = self._find_class_id_by_name(raw)
+        if found is not None:
+            return found
+
+        if raw.lower().startswith("id:"):
+            id_part = raw[3:].strip()
+            if id_part.isdigit():
+                class_id = int(id_part)
+                self._ensure_class_name(class_id)
+                return class_id
+            return None
+
+        if raw.isdigit():
+            class_id = int(raw)
+            self._ensure_class_name(class_id)
+            return class_id
+
+        if not create_if_missing_name:
+            return None
+
+        self.class_names.append(raw)
+        self._persist_class_names()
+        return len(self.class_names) - 1
+
+    def _prompt_class_id_or_name(self, title: str, label: str, default_text: str = "") -> int | None:
+        text = self._prompt_text_dialog(
+            title=title,
+            label=label,
+            default_text=default_text,
+            placeholder="示例：0 / point / 缺陷A / id:3",
+        )
+        if text is None:
+            return None
+
+        class_id = self._resolve_class_token(text, create_if_missing_name=True)
+        if class_id is None:
+            QMessageBox.warning(self, "输入无效", "请输入有效的类别ID或类别名称。")
+            return None
+        return class_id
 
     def _display_file_name(self, idx: int) -> str:
         root = self.item_roots[idx]
@@ -1455,34 +1585,18 @@ class MainWindow(QMainWindow):
         if 0 <= current_row < len(self.current_annotations):
             default_class = self.current_annotations[current_row].class_id
 
-        class_id, ok = QInputDialog.getInt(
-            self,
+        self._ensure_class_name(default_class)
+        default_text = self.class_names[default_class]
+        class_id = self._prompt_class_id_or_name(
             "新增标注",
-            "请输入新增类别ID：",
-            value=default_class,
-            min=0,
-            max=100000,
+            "请输入类别ID（数字）或类别名称（文本）：",
+            default_text=default_text,
         )
-        if not ok:
+        if class_id is None:
             return
 
-        self._ensure_class_name(class_id)
-        current_name = self.class_names[class_id]
-        if current_name == f"cls_{class_id}":
-            new_name, ok_name = QInputDialog.getText(
-                self,
-                "设置类别名",
-                f"类别ID {class_id} 的名称（回车保留默认）：",
-                text=current_name,
-            )
-            if ok_name:
-                new_name = new_name.strip()
-                if new_name:
-                    self.class_names[class_id] = new_name
-                    self._persist_class_names()
-
-        mode_text = self.shape_mode_combo.currentText() if hasattr(self, "shape_mode_combo") else "矩形"
-        shape_mode = {"矩形": "bbox", "旋转框": "rotated", "多边形": "polygon"}.get(mode_text, "bbox")
+        mode_index = self.shape_mode_combo.currentIndex() if hasattr(self, "shape_mode_combo") else 0
+        shape_mode = {0: "bbox", 1: "rotated", 2: "polygon"}.get(mode_index, "bbox")
         self.canvas.start_create_mode(class_id, shape_mode)
 
         if shape_mode == "bbox":
@@ -1549,15 +1663,15 @@ class MainWindow(QMainWindow):
             return
 
         current = self.current_annotations[row].class_id
-        new_class, ok = QInputDialog.getInt(
-            self,
+        self._ensure_class_name(current)
+        default_text = self.class_names[current]
+
+        new_class = self._prompt_class_id_or_name(
             "修改类别",
-            "请输入新的类别ID：",
-            value=current,
-            min=0,
-            max=100000,
+            "请输入新的类别ID或类别名称：",
+            default_text=default_text,
         )
-        if not ok or new_class == current:
+        if new_class is None or new_class == current:
             return
 
         self._ensure_class_name(new_class)
@@ -1570,37 +1684,40 @@ class MainWindow(QMainWindow):
         )
         self.undo_stack.push(cmd)
 
-
     def on_edit_class_name(self) -> None:
         if self.current_index < 0:
             QMessageBox.information(self, "未选择", "请先导入并选择一个样本。")
             return
 
-        default_class = 0
+        default_text = ""
         row = self.annotation_table.currentRow()
         if 0 <= row < len(self.current_annotations):
-            default_class = self.current_annotations[row].class_id
+            class_id = self.current_annotations[row].class_id
+            self._ensure_class_name(class_id)
+            default_text = self.class_names[class_id]
 
-        class_id, ok = QInputDialog.getInt(
-            self,
-            "编辑类别名",
-            "类别ID：",
-            value=default_class,
-            min=0,
-            max=100000,
+        token = self._prompt_text_dialog(
+            title="编辑类别名",
+            label="请先输入类别ID或类别名称，用于定位要修改的类别：",
+            default_text=default_text,
+            placeholder="示例：0 / point / 缺陷A / id:3",
         )
-        if not ok:
+        if token is None:
             return
 
-        self._ensure_class_name(class_id)
+        class_id = self._resolve_class_token(token, create_if_missing_name=False)
+        if class_id is None:
+            QMessageBox.warning(self, "未找到类别", "未匹配到类别，请检查输入的ID或名称。")
+            return
+
         current_name = self.class_names[class_id]
-        new_name, ok = QInputDialog.getText(
-            self,
-            "编辑类别名",
-            f"类别ID {class_id} 的类别名：",
-            text=current_name,
+        new_name = self._prompt_text_dialog(
+            title="编辑类别名",
+            label=f"请输入类别 ID {class_id} 的新名称：",
+            default_text=current_name,
+            placeholder="例如：point / scratch / 缺陷A",
         )
-        if not ok:
+        if new_name is None:
             return
 
         new_name = new_name.strip()
