@@ -82,7 +82,7 @@ jobs:
             "dist/yolo-viewer-lite/yolo-viewer-lite.exe",
             "dist/yolo-viewer-lite/python310.dll",
             "dist/yolo-viewer-lite/vcruntime140.dll",
-            "dist/yolo-viewer-lite/vcruntime140_1.dll",
+            "dist/yolo-viewer-lite/vcruntime140_1.dll"
           )
           foreach ($f in $required) {
             if (-not (Test-Path -LiteralPath $f)) {
@@ -136,7 +136,7 @@ jobs:
             "dist/yolo-viewer-full/yolo-viewer-full.exe",
             "dist/yolo-viewer-full/python310.dll",
             "dist/yolo-viewer-full/vcruntime140.dll",
-            "dist/yolo-viewer-full/vcruntime140_1.dll",
+            "dist/yolo-viewer-full/vcruntime140_1.dll"
           )
           foreach ($f in $required) {
             if (-not (Test-Path -LiteralPath $f)) {
@@ -191,4 +191,5 @@ jobs:
           path: dist/yolo-viewer-lite/
           if-no-files-found: error
           retention-days: 14
+
 
