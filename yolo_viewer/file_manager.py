@@ -231,6 +231,11 @@ def _load_with_pillow(path: Path, qimage_cls, qpixmap_cls):
         return qpixmap_cls()
 
 
+def _safe_use_qimage_fallback() -> bool:
+    flag = os.environ.get("YOLO_VIEWER_USE_QT_IMAGE_FALLBACK", "0").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
 def load_pixmap(path: Path):
     """Decode image into QPixmap.
 
@@ -239,7 +244,7 @@ def load_pixmap(path: Path):
     try:
         from PyQt6.QtGui import QImage, QPixmap
     except Exception as exc:
-        raise RuntimeError("缺少 PyQt6，无法加载图片。") from exc
+        raise RuntimeError("Missing PyQt6: cannot load image.") from exc
 
     if not path.exists():
         return QPixmap()
@@ -251,10 +256,9 @@ def load_pixmap(path: Path):
 
     suffix = path.suffix.lower()
 
-    # 明确排除 TIFF，避免解码异常和噪声日志。
+    # Exclude TIFF to avoid decoder issues.
     if suffix in {".tif", ".tiff"}:
         return QPixmap()
-
 
     try:
         import cv2
@@ -291,12 +295,17 @@ def load_pixmap(path: Path):
         except Exception:
             pass
 
-    fallback = _load_with_qimage(path, QImage, QPixmap)
-    if not fallback.isNull():
-        return fallback
-
+    # Prefer Pillow in lite package to avoid Qt plugin edge-case crash.
     fallback = _load_with_pillow(path, QImage, QPixmap)
     if not fallback.isNull():
         return fallback
 
+    # Optional Qt fallback decoder.
+    # Set YOLO_VIEWER_USE_QT_IMAGE_FALLBACK=1 to enable.
+    if _safe_use_qimage_fallback():
+        fallback = _load_with_qimage(path, QImage, QPixmap)
+        if not fallback.isNull():
+            return fallback
+
     return QPixmap()
+

@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from .auto_annotator import AutoAnnotator, AutoAnnotatorError
 from .colors import class_color
+from .crash_logger import append_log, install_global_exception_handler
 from .exporter import export_passed_files
 from .file_manager import PixmapCache, load_pixmap, scan_dataset
 from .models import Annotation, DatasetItem, FileValidation
@@ -904,8 +905,8 @@ class MainWindow(QMainWindow):
             self._rebuild_file_table()
             self._rebuild_anomaly_index(full_scan=False)
 
-            if self.visible_indices and self.current_index < 0:
-                self._select_global_index(self.visible_indices[0])
+            if self.current_index >= 0 and self.current_index in self.visible_indices:
+                self._select_global_index(self.current_index)
         except Exception as exc:
             traceback.print_exc()
             QMessageBox.critical(self, "导入失败", f"导入后刷新界面失败：{exc}")
@@ -1312,7 +1313,7 @@ class MainWindow(QMainWindow):
                     self.cache.put(item.image_path, pixmap)
 
             if pixmap.isNull():
-                self.statusBar().showMessage("图片缺失或解码失败。")
+                self.statusBar().showMessage("Image missing or decode failed.")
                 self.canvas.clear_content()
                 self.image_size_cache.pop(global_idx, None)
             else:
@@ -1324,6 +1325,14 @@ class MainWindow(QMainWindow):
             if refresh_table:
                 self._refresh_visible_row_for_index(global_idx)
             self._update_anomaly_for_index(global_idx, refresh_combo=True)
+        except Exception:
+            traceback.print_exc()
+            log_path = append_log(
+                f"[on_file_selected] global_idx={global_idx}\n" + traceback.format_exc()
+            )
+            self.canvas.clear_content()
+            self.statusBar().showMessage(f"Preview failed. Log: {log_path}")
+            QMessageBox.warning(self, "Preview Error", f"Failed to load sample.\nLog:\n{log_path}")
         finally:
             self._updating_ui = False
 
@@ -2025,6 +2034,7 @@ class MainWindow(QMainWindow):
 
 def run() -> None:
     app = QApplication([])
+    install_global_exception_handler()
     app.setWindowIcon(QIcon())
     window = MainWindow()
     window.show()
