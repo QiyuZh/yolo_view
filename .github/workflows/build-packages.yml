@@ -69,21 +69,32 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Build lite onedir package
         shell: pwsh
         run: ./scripts/build_windows_lite.ps1 -OneDir
 
-      - name: Archive artifact
+      - name: Verify runtime files
         shell: pwsh
-        run: Compress-Archive -Path dist/yolo-viewer-lite/* -DestinationPath dist/yolo-viewer-lite-windows.zip -Force
+        run: |
+          $required = @(
+            "dist/yolo-viewer-lite/yolo-viewer-lite.exe",
+            "dist/yolo-viewer-lite/_internal/python310.dll",
+            "dist/yolo-viewer-lite/_internal/vcruntime140.dll"
+          )
+          foreach ($f in $required) {
+            if (-not (Test-Path -LiteralPath $f)) {
+              throw "Missing runtime file: $f"
+            }
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: yolo-viewer-lite-windows-${{ github.sha }}
-          path: dist/yolo-viewer-lite-windows.zip
+          path: dist/yolo-viewer-lite/
+          if-no-files-found: error
           retention-days: 14
 
   build_windows_full:
@@ -97,21 +108,32 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Build full onedir package
         shell: pwsh
         run: ./scripts/build_windows_full.ps1 -OneDir
 
-      - name: Archive artifact
+      - name: Verify runtime files
         shell: pwsh
-        run: Compress-Archive -Path dist/yolo-viewer-full/* -DestinationPath dist/yolo-viewer-full-windows.zip -Force
+        run: |
+          $required = @(
+            "dist/yolo-viewer-full/yolo-viewer-full.exe",
+            "dist/yolo-viewer-full/_internal/python310.dll",
+            "dist/yolo-viewer-full/_internal/vcruntime140.dll"
+          )
+          foreach ($f in $required) {
+            if (-not (Test-Path -LiteralPath $f)) {
+              throw "Missing runtime file: $f"
+            }
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: yolo-viewer-full-windows-${{ github.sha }}
-          path: dist/yolo-viewer-full-windows.zip
+          path: dist/yolo-viewer-full/
+          if-no-files-found: error
           retention-days: 14
 
   build_macos_lite:
@@ -125,21 +147,18 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Build lite onedir package
         run: |
           chmod +x ./scripts/build_macos_lite.sh
           ./scripts/build_macos_lite.sh --onedir
 
-      - name: Archive artifact
-        run: |
-          cd dist
-          ditto -c -k --sequesterRsrc --keepParent yolo-viewer-lite yolo-viewer-lite-macos.zip
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: yolo-viewer-lite-macos-${{ github.sha }}
-          path: dist/yolo-viewer-lite-macos.zip
+          path: dist/yolo-viewer-lite/
+          if-no-files-found: error
           retention-days: 14
+

@@ -206,9 +206,10 @@ chmod +x ./scripts/build_macos_full.sh
 - `Actions -> Build Packages -> Run workflow` 可手动触发：
   - 勾选 `build_full`：额外构建 `Windows Full` 包。
   - 勾选 `build_macos`：额外构建 `macOS Lite` 包。
-- 构建完成后在对应 Workflow Run 的 `Artifacts` 中下载压缩包。
+- 构建完成后在对应 Workflow Run 的 `Artifacts` 中下载构建目录包（下载后解压一次即可运行）。
 
 建议发布流程：
 
 1. 先在 PR 看 `Windows Lite` 产物是否可运行。
 2. 发版前手动触发一次，按需勾选 `build_full / build_macos`。
+
