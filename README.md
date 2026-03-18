@@ -197,3 +197,18 @@ chmod +x ./scripts/build_macos_full.sh
 1. 追求最小体积：`lite + onefile + UPX`
 2. 追求启动速度：`lite + onedir`
 3. 必须使用自动标注：使用 `full` 构建
+
+## GitHub Actions 自动打包
+
+仓库已内置工作流：`.github/workflows/build-packages.yml`。
+
+- `push/main` 或 `PR` 时：自动运行测试，并构建 `Windows Lite` 包。
+- `Actions -> Build Packages -> Run workflow` 可手动触发：
+  - 勾选 `build_full`：额外构建 `Windows Full` 包。
+  - 勾选 `build_macos`：额外构建 `macOS Lite` 包。
+- 构建完成后在对应 Workflow Run 的 `Artifacts` 中下载压缩包。
+
+建议发布流程：
+
+1. 先在 PR 看 `Windows Lite` 产物是否可运行。
+2. 发版前手动触发一次，按需勾选 `build_full / build_macos`。

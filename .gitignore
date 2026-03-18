@@ -23,3 +23,12 @@ Thumbs.db
 *.engine
 *.ckpt
 *.pth
+
+# Packaging outputs
+build/
+dist/
+_MEI*/
+
+# Keep only the maintained spec file
+yolo-viewer-*.spec
+!yolo-viewer-lite.spec
