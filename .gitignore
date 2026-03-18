@@ -29,6 +29,5 @@ build/
 dist/
 _MEI*/
 
-# Keep only the maintained spec file
+# Packaging spec files
 yolo-viewer-*.spec
-!yolo-viewer-lite.spec
