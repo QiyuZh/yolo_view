@@ -213,3 +213,7 @@ chmod +x ./scripts/build_macos_full.sh
 1. 先在 PR 看 `Windows Lite` 产物是否可运行。
 2. 发版前手动触发一次，按需勾选 `build_full / build_macos`。
 
+
+
+Windows 运行注意：请保持整个构建目录结构（含 DLL 文件）并从目录内运行 yolo-viewer-lite.exe，不要只拷贝单个 exe。
+

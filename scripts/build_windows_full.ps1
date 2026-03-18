@@ -18,7 +18,10 @@ $buildArgs = @(
     "main.py"
 )
 
-if (-not $OneDir) {
+if ($OneDir) {
+    # Keep runtime files next to exe (avoid _internal layout issues on some Windows setups).
+    $buildArgs = @("--onedir", "--contents-directory", ".") + $buildArgs
+} else {
     $buildArgs = @("--onefile") + $buildArgs
 }
 
