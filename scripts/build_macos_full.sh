@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -16,6 +16,7 @@ python -m PyInstaller \
   ${MODE} \
   --noconfirm --clean --windowed \
   --name yolo-viewer-full \
+  --add-data "yolo_viewer/assets:yolo_viewer/assets" \
   main.py
 
 echo "构建完成。输出目录：dist/"

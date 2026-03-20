@@ -24,6 +24,8 @@ $buildArgs = @(
     "--exclude-module", "pandas",
     "--exclude-module", "matplotlib",
     "--exclude-module", "scipy",
+    "--icon", "yolo_viewer/assets/app_icon.ico",
+    "--add-data", "yolo_viewer/assets;yolo_viewer/assets",
     "main.py"
 )
 

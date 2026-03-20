@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import datetime
 import faulthandler
@@ -57,11 +57,16 @@ def install_global_exception_handler() -> Path:
         try:
             from PyQt6.QtWidgets import QMessageBox
 
-            QMessageBox.critical(
-                None,
-                "Unhandled Exception",
-                f"Application crashed. Log saved to:\n{log_path}",
-            )
+            from .icons import load_app_icon
+
+            box = QMessageBox()
+            app_icon = load_app_icon()
+            if not app_icon.isNull():
+                box.setWindowIcon(app_icon)
+            box.setIcon(QMessageBox.Icon.Critical)
+            box.setWindowTitle("Unhandled Exception")
+            box.setText(f"Application crashed. Log saved to:\n{log_path}")
+            box.exec()
         except Exception:
             pass
 

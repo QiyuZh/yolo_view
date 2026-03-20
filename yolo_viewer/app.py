@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 from .auto_annotator import AutoAnnotator, AutoAnnotatorError
 from .colors import class_color
 from .crash_logger import append_log, install_global_exception_handler
+from .icons import load_app_icon
 from .exporter import export_passed_files
 from .file_manager import PixmapCache, load_pixmap, scan_dataset
 from .models import Annotation, DatasetItem, FileValidation
@@ -132,6 +133,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("YOLO 数据集查看与校验工具")
         self.resize(1720, 1000)
+
+        self._app_icon = load_app_icon()
+        if not self._app_icon.isNull():
+            self.setWindowIcon(self._app_icon)
 
         self.dataset_roots: list[Path] = []
         self.items: list[DatasetItem] = []
@@ -471,6 +476,123 @@ class MainWindow(QMainWindow):
         splitter.setSizes([516, 860, 344])
 
         self._refresh_anomaly_combo()
+
+    def _dialog_icon(self) -> QIcon:
+        icon = self.windowIcon()
+        if not icon.isNull():
+            return icon
+        return load_app_icon()
+
+    def _show_message(
+        self,
+        level: QMessageBox.Icon,
+        title: str,
+        text: str,
+        buttons: QMessageBox.StandardButtons = QMessageBox.StandardButton.Ok,
+        default_button: QMessageBox.StandardButton | None = None,
+    ) -> QMessageBox.StandardButton:
+        box = QMessageBox(self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            box.setWindowIcon(dlg_icon)
+        box.setIcon(level)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setStandardButtons(buttons)
+        if default_button is not None:
+            box.setDefaultButton(default_button)
+        return QMessageBox.StandardButton(box.exec())
+
+    def _show_info(self, title: str, text: str) -> QMessageBox.StandardButton:
+        return self._show_message(QMessageBox.Icon.Information, title, text)
+
+    def _show_warning(self, title: str, text: str) -> QMessageBox.StandardButton:
+        return self._show_message(QMessageBox.Icon.Warning, title, text)
+
+    def _show_critical(self, title: str, text: str) -> QMessageBox.StandardButton:
+        return self._show_message(QMessageBox.Icon.Critical, title, text)
+
+    def _ask_question(
+        self,
+        title: str,
+        text: str,
+        buttons: QMessageBox.StandardButtons,
+        default_button: QMessageBox.StandardButton,
+    ) -> QMessageBox.StandardButton:
+        return self._show_message(
+            QMessageBox.Icon.Question,
+            title,
+            text,
+            buttons=buttons,
+            default_button=default_button,
+        )
+
+    def _input_int(
+        self,
+        title: str,
+        label: str,
+        value: int,
+        minimum: int,
+        maximum: int,
+        step: int = 1,
+    ) -> tuple[int, bool]:
+        dialog = QInputDialog(self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            dialog.setWindowIcon(dlg_icon)
+        dialog.setWindowTitle(title)
+        dialog.setLabelText(label)
+        dialog.setInputMode(QInputDialog.InputMode.IntInput)
+        dialog.setIntRange(minimum, maximum)
+        dialog.setIntValue(value)
+        dialog.setIntStep(step)
+        ok = dialog.exec() == QDialog.DialogCode.Accepted
+        return dialog.intValue(), ok
+
+    def _input_double(
+        self,
+        title: str,
+        label: str,
+        value: float,
+        minimum: float,
+        maximum: float,
+        decimals: int = 2,
+        step: float = 0.1,
+    ) -> tuple[float, bool]:
+        dialog = QInputDialog(self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            dialog.setWindowIcon(dlg_icon)
+        dialog.setWindowTitle(title)
+        dialog.setLabelText(label)
+        dialog.setInputMode(QInputDialog.InputMode.DoubleInput)
+        dialog.setDoubleRange(minimum, maximum)
+        dialog.setDoubleDecimals(decimals)
+        dialog.setDoubleValue(value)
+        dialog.setDoubleStep(step)
+        ok = dialog.exec() == QDialog.DialogCode.Accepted
+        return dialog.doubleValue(), ok
+
+    def _input_item(
+        self,
+        title: str,
+        label: str,
+        items: list[str],
+        current: str,
+    ) -> tuple[str, bool]:
+        dialog = QInputDialog(self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            dialog.setWindowIcon(dlg_icon)
+        dialog.setWindowTitle(title)
+        dialog.setLabelText(label)
+        dialog.setInputMode(QInputDialog.InputMode.TextInput)
+        dialog.setComboBoxItems(items)
+        dialog.setComboBoxEditable(False)
+        if current:
+            dialog.setTextValue(current)
+        ok = dialog.exec() == QDialog.DialogCode.Accepted
+        return dialog.textValue(), ok
 
     def _build_light_stylesheet(self) -> str:
         return """
@@ -871,7 +993,7 @@ class MainWindow(QMainWindow):
     def _load_folders(self, folders: list[Path], append: bool) -> None:
         valid_folders = [p for p in folders if p.exists()]
         if not valid_folders:
-            QMessageBox.warning(self, "路径错误", "未找到可用文件夹。")
+            self._show_warning("路径错误", "未找到可用文件夹。")
             return
 
         if not append:
@@ -891,6 +1013,9 @@ class MainWindow(QMainWindow):
         failed_roots: list[str] = []
 
         progress = QProgressDialog("正在扫描数据集文件夹...", "取消", 0, len(valid_folders), self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            progress.setWindowIcon(dlg_icon)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
 
         try:
@@ -933,20 +1058,20 @@ class MainWindow(QMainWindow):
                 self._select_global_index(self.current_index)
         except Exception as exc:
             traceback.print_exc()
-            QMessageBox.critical(self, "导入失败", f"导入后刷新界面失败：{exc}")
+            self._show_critical("导入失败", f"导入后刷新界面失败：{exc}")
             return
 
         if failed_roots:
             details = "\n".join(failed_roots[:5])
             more = "\n..." if len(failed_roots) > 5 else ""
-            QMessageBox.warning(self, "部分目录扫描失败", f"以下目录已跳过：\n{details}{more}")
+            self._show_warning("部分目录扫描失败", f"以下目录已跳过：\n{details}{more}")
 
         self.statusBar().showMessage(
             f"已加载 {len(self.items)} 个样本，来自 {len(self.dataset_roots)} 个文件夹，本次新增 {added_items} 个样本。"
         )
 
         if added_roots == 0:
-            QMessageBox.information(self, "提示", "所选文件夹均已导入。")
+            self._show_info("提示", "所选文件夹均已导入。")
 
     def _load_class_names(self, root: Path) -> list[str]:
         classes_txt = root / "classes.txt"
@@ -1043,6 +1168,9 @@ class MainWindow(QMainWindow):
         placeholder: str = "",
     ) -> str | None:
         dialog = QDialog(self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            dialog.setWindowIcon(dlg_icon)
         dialog.setWindowTitle(title)
         dialog.setModal(True)
         dialog.setMinimumWidth(460)
@@ -1126,7 +1254,7 @@ class MainWindow(QMainWindow):
 
         class_id = self._resolve_class_token(text, create_if_missing_name=True)
         if class_id is None:
-            QMessageBox.warning(self, "输入无效", "请输入有效的类别ID或类别名称。")
+            self._show_warning("输入无效", "请输入有效的类别ID或类别名称。")
             return None
         return class_id
 
@@ -1397,6 +1525,9 @@ class MainWindow(QMainWindow):
 
         if full_scan and self.items:
             progress = QProgressDialog("正在扫描异常项...", "取消", 0, len(self.items), self)
+            dlg_icon = self._dialog_icon()
+            if not dlg_icon.isNull():
+                progress.setWindowIcon(dlg_icon)
             progress.setWindowModality(Qt.WindowModality.WindowModal)
 
             for n, idx in enumerate(range(len(self.items)), start=1):
@@ -1491,7 +1622,7 @@ class MainWindow(QMainWindow):
             )
             self.canvas.clear_content()
             self.statusBar().showMessage(f"Preview failed. Log: {log_path}")
-            QMessageBox.warning(self, "Preview Error", f"Failed to load sample.\nLog:\n{log_path}")
+            self._show_warning("Preview Error", f"Failed to load sample.\nLog:\n{log_path}")
         finally:
             self._updating_ui = False
 
@@ -1577,7 +1708,7 @@ class MainWindow(QMainWindow):
 
     def start_add_box_mode(self) -> None:
         if self.current_index < 0:
-            QMessageBox.information(self, "未选择", "请先选择一个样本。")
+            self._show_info("未选择", "请先选择一个样本。")
             return
 
         default_class = 0
@@ -1659,7 +1790,7 @@ class MainWindow(QMainWindow):
     def on_change_class(self) -> None:
         row = self.annotation_table.currentRow()
         if row < 0 or row >= len(self.current_annotations):
-            QMessageBox.information(self, "未选择", "请先选择一个标注框。")
+            self._show_info("未选择", "请先选择一个标注框。")
             return
 
         current = self.current_annotations[row].class_id
@@ -1686,7 +1817,7 @@ class MainWindow(QMainWindow):
 
     def on_edit_class_name(self) -> None:
         if self.current_index < 0:
-            QMessageBox.information(self, "未选择", "请先导入并选择一个样本。")
+            self._show_info("未选择", "请先导入并选择一个样本。")
             return
 
         default_text = ""
@@ -1707,7 +1838,7 @@ class MainWindow(QMainWindow):
 
         class_id = self._resolve_class_token(token, create_if_missing_name=False)
         if class_id is None:
-            QMessageBox.warning(self, "未找到类别", "未匹配到类别，请检查输入的ID或名称。")
+            self._show_warning("未找到类别", "未匹配到类别，请检查输入的ID或名称。")
             return
 
         current_name = self.class_names[class_id]
@@ -1722,7 +1853,7 @@ class MainWindow(QMainWindow):
 
         new_name = new_name.strip()
         if not new_name:
-            QMessageBox.warning(self, "无效名称", "类别名不能为空。")
+            self._show_warning("无效名称", "类别名不能为空。")
             return
         if new_name == current_name:
             return
@@ -1736,11 +1867,7 @@ class MainWindow(QMainWindow):
 
         ok_count, fail_count = self._persist_class_names()
         if fail_count > 0:
-            QMessageBox.warning(
-                self,
-                "部分保存失败",
-                f"已写入 {ok_count} 个数据集，失败 {fail_count} 个。",
-            )
+            self._show_warning("部分保存失败", f"已写入 {ok_count} 个数据集，失败 {fail_count} 个。")
         else:
             self.statusBar().showMessage(f"类别ID {class_id} 已更新为：{new_name}", 2500)
 
@@ -1758,7 +1885,7 @@ class MainWindow(QMainWindow):
 
     def batch_delete_same_class(self) -> None:
         if self.current_index < 0 or not self.current_annotations:
-            QMessageBox.information(self, "无可删标注", "当前图片没有可批量删除的标注。")
+            self._show_info("无可删标注", "当前图片没有可批量删除的标注。")
             return
 
         default_class = 0
@@ -1766,20 +1893,19 @@ class MainWindow(QMainWindow):
         if 0 <= row < len(self.current_annotations):
             default_class = self.current_annotations[row].class_id
 
-        class_id, ok = QInputDialog.getInt(
-            self,
+        class_id, ok = self._input_int(
             "批量删除同类",
             "请输入要删除的类别ID：",
             value=default_class,
-            min=0,
-            max=100000,
+            minimum=0,
+            maximum=100000,
         )
         if not ok:
             return
 
         indices = [i for i, ann in enumerate(self.current_annotations) if ann.class_id == class_id]
         if not indices:
-            QMessageBox.information(self, "无匹配", f"当前图片中没有类别ID={class_id}的标注。")
+            self._show_info("无匹配", f"当前图片中没有类别ID={class_id}的标注。")
             return
 
         self.undo_stack.beginMacro(f"批量删除类别 {class_id}")
@@ -1860,11 +1986,11 @@ class MainWindow(QMainWindow):
 
     def auto_annotate(self, _checked: bool = False) -> None:
         if self._auto_running:
-            QMessageBox.information(self, "自动标注进行中", "已有自动标注任务在执行，请稍候。")
+            self._show_info("自动标注进行中", "已有自动标注任务在执行，请稍候。")
             return
 
         if not self.items:
-            QMessageBox.information(self, "未导入数据集", "请先导入数据集。")
+            self._show_info("未导入数据集", "请先导入数据集。")
             return
 
         start_dir = str(self.dataset_roots[0]) if self.dataset_roots else ""
@@ -1877,25 +2003,24 @@ class MainWindow(QMainWindow):
         if not model_file:
             return
 
-        conf_threshold, ok = QInputDialog.getDouble(
-            self,
+        conf_threshold, ok = self._input_double(
             "置信度阈值",
             "请输入置信度阈值 (0-1)：",
             value=self.auto_conf_threshold,
-            min=0.0,
-            max=1.0,
+            minimum=0.0,
+            maximum=1.0,
             decimals=2,
+            step=0.01,
         )
         if not ok:
             return
 
-        scope, ok = QInputDialog.getItem(
-            self,
+        scopes = ["当前图片", "全部图片", "仅异常未标注图片"]
+        scope, ok = self._input_item(
             "自动标注范围",
             "选择标注范围：",
-            ["当前图片", "全部图片", "仅异常未标注图片"],
-            0,
-            False,
+            scopes,
+            scopes[0],
         )
         if not ok:
             return
@@ -1905,7 +2030,7 @@ class MainWindow(QMainWindow):
 
         if scope == "当前图片":
             if self.current_index < 0:
-                QMessageBox.information(self, "未选择", "请先选择一个样本。")
+                self._show_info("未选择", "请先选择一个样本。")
                 return
             indices = [self.current_index]
         elif scope == "仅异常未标注图片":
@@ -1946,7 +2071,7 @@ class MainWindow(QMainWindow):
 
     def _run_auto_annotate_async(self, model_path: Path, conf_threshold: float, indices: list[int]) -> None:
         if not indices:
-            QMessageBox.information(self, "无可处理文件", "没有可用于自动标注的图片。")
+            self._show_info("无可处理文件", "没有可用于自动标注的图片。")
             return
 
         tasks: list[tuple[int, str]] = []
@@ -1957,13 +2082,16 @@ class MainWindow(QMainWindow):
             tasks.append((idx, str(image_path)))
 
         if not tasks:
-            QMessageBox.information(self, "无可处理文件", "没有可用于自动标注的图片。")
+            self._show_info("无可处理文件", "没有可用于自动标注的图片。")
             return
 
         self._auto_running = True
         self.statusBar().showMessage("自动标注执行中，请稍候...")
 
         progress = QProgressDialog("正在执行自动标注（后台）...", "取消", 0, len(tasks), self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            progress.setWindowIcon(dlg_icon)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setAutoClose(False)
         progress.setAutoReset(False)
@@ -2009,7 +2137,7 @@ class MainWindow(QMainWindow):
         if fatal_error:
             self._auto_running = False
             self.statusBar().showMessage("自动标注失败。")
-            QMessageBox.warning(self, "自动标注失败", str(fatal_error))
+            self._show_warning("自动标注失败", str(fatal_error))
             return
 
         model_names = data.get("model_names")
@@ -2029,6 +2157,9 @@ class MainWindow(QMainWindow):
         }
 
         progress = QProgressDialog("正在应用标注结果...", "取消", 0, len(results), self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            progress.setWindowIcon(dlg_icon)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
@@ -2141,17 +2272,20 @@ class MainWindow(QMainWindow):
         self._auto_apply_state = None
         self._auto_running = False
         self.statusBar().showMessage("自动标注完成。")
-        QMessageBox.information(self, "自动标注完成", msg)
+        self._show_info("自动标注完成", msg)
 
     def validate_all(self, _checked: bool = False) -> None:
         self._run_validate_all(show_message=True)
 
     def _run_validate_all(self, show_message: bool) -> None:
         if not self.items:
-            QMessageBox.information(self, "未导入数据集", "请先导入数据集。")
+            self._show_info("未导入数据集", "请先导入数据集。")
             return
 
         progress = QProgressDialog("正在校验数据集...", "取消", 0, len(self.items), self)
+        dlg_icon = self._dialog_icon()
+        if not dlg_icon.isNull():
+            progress.setWindowIcon(dlg_icon)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
 
         checked = 0
@@ -2174,23 +2308,18 @@ class MainWindow(QMainWindow):
                 for v in self.validation_map.values()
                 if (not v.has_error and any(issue.severity != "error" for issue in v.issues))
             )
-            QMessageBox.information(
-                self,
-                "校验完成",
-                f"共校验 {checked} 个文件。错误文件：{error_files}，警告文件：{warn_files}",
-            )
+            self._show_info("校验完成", f"共校验 {checked} 个文件。错误文件：{error_files}，警告文件：{warn_files}")
 
         if self.current_index >= 0 and self.current_index in self.validation_map:
             self._show_validation_issues(self.validation_map[self.current_index])
 
     def export_passed(self, _checked: bool = False) -> None:
         if not self.items:
-            QMessageBox.information(self, "未导入数据集", "请先导入并校验数据集。")
+            self._show_info("未导入数据集", "请先导入并校验数据集。")
             return
 
         if len(self.validation_map) < len(self.items):
-            run_validate = QMessageBox.question(
-                self,
+            run_validate = self._ask_question(
                 "导出前校验",
                 "当前不是全量校验结果，是否先执行一次全量校验再导出？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -2221,11 +2350,11 @@ class MainWindow(QMainWindow):
 
             copied_total += export_passed_files(sub_target, root, sub_items, sub_validation)
 
-        QMessageBox.information(self, "导出完成", f"已复制 {copied_total} 组校验通过的样本。")
+        self._show_info("导出完成", f"已复制 {copied_total} 组校验通过的样本。")
 
     def save_screenshot(self, _checked: bool = False) -> None:
         if self.current_index < 0:
-            QMessageBox.information(self, "未选择", "请先选择一个样本。")
+            self._show_info("未选择", "请先选择一个样本。")
             return
 
         selected, _ = QFileDialog.getSaveFileName(
@@ -2239,20 +2368,23 @@ class MainWindow(QMainWindow):
 
         image = self.canvas.grab_annotated_image()
         if image.isNull():
-            QMessageBox.warning(self, "保存失败", "当前没有可保存的图像内容。")
+            self._show_warning("保存失败", "当前没有可保存的图像内容。")
             return
 
         ok = image.save(selected)
         if ok:
-            QMessageBox.information(self, "已保存", f"截图已保存到：\n{selected}")
+            self._show_info("已保存", f"截图已保存到：\n{selected}")
         else:
-            QMessageBox.warning(self, "保存失败", "无法写入截图文件。")
+            self._show_warning("保存失败", "无法写入截图文件。")
 
 
 def run() -> None:
     app = QApplication([])
+    icon = load_app_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
     install_global_exception_handler()
-    app.setWindowIcon(QIcon())
     window = MainWindow()
     window.show()
     app.exec()
+
