@@ -131,7 +131,7 @@ class AutoAnnotateWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("YOLO 数据集查看与校验工具")
+        self.setWindowTitle("奇钰的YOLO 数据集工具")
         self.resize(1720, 1000)
 
         self._app_icon = load_app_icon()
@@ -345,7 +345,7 @@ class MainWindow(QMainWindow):
         middle_layout.addWidget(self.canvas, stretch=8)
 
         tip_label = QLabel(
-            "提示：新增矩形=拖拽；新增旋转框=依次点击4个点；新增多边形=逐点点击，右键或回车完成。"
+            "提示：新增矩形=拖拽；新增旋转框=依次点击4个点；新增多边形=逐点点击，右键或回车完成。编辑矩形：拖边/角点可缩放，拖中心点或框内可平移。"
         )
         tip_label.setObjectName("hintLabel")
         tip_label.setWordWrap(True)
@@ -1971,7 +1971,8 @@ class MainWindow(QMainWindow):
         label_path.parent.mkdir(parents=True, exist_ok=True)
         self._backup_label_once(idx, item, label_path)
 
-        lines = [ann.to_yolo_line(include_confidence=True) for ann in annotations]
+        # Training labels should be plain YOLO format: class x y w h (no confidence column).
+        lines = [ann.to_yolo_line(include_confidence=False) for ann in annotations]
         text = "\n".join(lines)
         if text:
             text += "\n"

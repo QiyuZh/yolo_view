@@ -34,6 +34,7 @@ def clamp(value: float, low: float, high: float) -> float:
 class EditableBoxItem(QGraphicsRectItem):
     HANDLE_MARGIN = 8.0
     MIN_SIZE = 6.0
+    CENTER_HIT_RADIUS = 10.0
 
     def __init__(
         self,
@@ -98,8 +99,24 @@ class EditableBoxItem(QGraphicsRectItem):
         )
         self.setToolTip(text)
 
+    def _is_center_handle_hit(self, pos: QPointF) -> bool:
+        if not self._center_marker_visible:
+            return False
+        r = self.rect()
+        if not r.contains(pos):
+            return False
+
+        center = r.center()
+        dx = pos.x() - center.x()
+        dy = pos.y() - center.y()
+        dynamic_radius = max(4.0, min(self.CENTER_HIT_RADIUS, min(r.width(), r.height()) * 0.35))
+        return (dx * dx + dy * dy) <= (dynamic_radius * dynamic_radius)
+
     def _handle_for_pos(self, pos: QPointF) -> str:
         r = self.rect()
+        if self._is_center_handle_hit(pos):
+            return "center_move"
+
         near_left = abs(pos.x() - r.left()) <= self.HANDLE_MARGIN
         near_right = abs(pos.x() - r.right()) <= self.HANDLE_MARGIN
         near_top = abs(pos.y() - r.top()) <= self.HANDLE_MARGIN
@@ -136,6 +153,7 @@ class EditableBoxItem(QGraphicsRectItem):
             "top": Qt.CursorShape.SizeVerCursor,
             "bottom": Qt.CursorShape.SizeVerCursor,
             "move": Qt.CursorShape.SizeAllCursor,
+            "center_move": Qt.CursorShape.SizeAllCursor,
         }
         return mapping.get(handle, Qt.CursorShape.ArrowCursor)
 
@@ -163,7 +181,7 @@ class EditableBoxItem(QGraphicsRectItem):
         delta = event.scenePos() - self._drag_origin_scene
         rect = QRectF(self._drag_origin_rect)
 
-        if self._drag_mode == "move":
+        if self._drag_mode in ("move", "center_move"):
             rect.translate(delta)
         else:
             if "left" in self._drag_mode:
