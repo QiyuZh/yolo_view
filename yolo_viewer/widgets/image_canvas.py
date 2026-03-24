@@ -13,6 +13,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QTransform,
 )
 from PyQt6.QtWidgets import (
     QGraphicsPolygonItem,
@@ -409,9 +410,22 @@ class ImageCanvas(QGraphicsView):
         self._poly_points_scene: list[QPointF] = []
         self._poly_preview_item: QGraphicsPolygonItem | None = None
 
-    def set_content(self, pixmap: QPixmap, annotations: list[Annotation], class_names: list[str]) -> None:
+    def set_content(
+        self,
+        pixmap: QPixmap,
+        annotations: list[Annotation],
+        class_names: list[str],
+        preserve_view: bool = False,
+    ) -> None:
         self.cancel_create_mode()
         self._stop_flash()
+
+        previous_transform = None
+        previous_center = None
+        if preserve_view and not self._image_rect.isNull() and self._pixmap_item is not None:
+            previous_transform = QTransform(self.transform())
+            previous_center = self.mapToScene(self.viewport().rect().center())
+
         self._scene.clear()
         self._pixmap_item = self._scene.addPixmap(pixmap)
         self._pixmap_item.setZValue(0)
@@ -473,7 +487,15 @@ class ImageCanvas(QGraphicsView):
             self._scene.addItem(p_item)
             self._anno_items.append(p_item)
 
-        self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        if preserve_view and previous_transform is not None and previous_center is not None and not self._image_rect.isNull():
+            self.setTransform(previous_transform)
+            clamped_center = QPointF(
+                clamp(previous_center.x(), self._image_rect.left(), self._image_rect.right()),
+                clamp(previous_center.y(), self._image_rect.top(), self._image_rect.bottom()),
+            )
+            self.centerOn(clamped_center)
+        else:
+            self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def set_center_marker_visible(self, visible: bool) -> None:
         self._center_marker_visible = bool(visible)
@@ -680,7 +702,7 @@ class ImageCanvas(QGraphicsView):
 
     def update_annotations(self, annotations: list[Annotation], class_names: list[str], selected_index: int = -1) -> None:
         pixmap = self._pixmap_item.pixmap()
-        self.set_content(pixmap, annotations, class_names)
+        self.set_content(pixmap, annotations, class_names, preserve_view=True)
         if 0 <= selected_index < len(self._anno_items):
             self._anno_items[selected_index].setSelected(True)
 
@@ -807,3 +829,6 @@ class ImageCanvas(QGraphicsView):
         self._scene.render(painter)
         painter.end()
         return image
+
+
+
