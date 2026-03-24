@@ -409,7 +409,7 @@ class ImageCanvas(QGraphicsView):
 
         self._poly_points_scene: list[QPointF] = []
         self._poly_preview_item: QGraphicsPolygonItem | None = None
-
+        self._point_square_side_px = 32
     def set_content(
         self,
         pixmap: QPixmap,
@@ -417,7 +417,9 @@ class ImageCanvas(QGraphicsView):
         class_names: list[str],
         preserve_view: bool = False,
     ) -> None:
-        self.cancel_create_mode()
+        keep_point_mode = preserve_view and self._create_mode and self._create_shape_type == "point_square"
+        if not keep_point_mode:
+            self.cancel_create_mode()
         self._stop_flash()
 
         previous_transform = None
@@ -439,7 +441,7 @@ class ImageCanvas(QGraphicsView):
 
         for index, ann in enumerate(self._annotations):
             class_name = self._class_name_for_id(ann.class_id)
-            if ann.shape_type == "bbox" and not ann.points:
+            if ann.shape_type in ("bbox", "square") and not ann.points:
                 rect = self._normalized_to_rect(ann)
                 item = EditableBoxItem(
                     index=index,
@@ -505,6 +507,9 @@ class ImageCanvas(QGraphicsView):
             else:
                 item.update()
 
+    def set_point_square_side_px(self, side_px: int) -> None:
+        self._point_square_side_px = max(6, int(side_px))
+
     def _class_name_for_id(self, class_id: int) -> str:
         if 0 <= class_id < len(self._class_names):
             return self._class_names[class_id]
@@ -564,8 +569,9 @@ class ImageCanvas(QGraphicsView):
     def _on_item_geometry_change(self, index: int, old_rect: QRectF, new_rect: QRectF) -> None:
         old_ann = self._rect_to_normalized(old_rect, self._annotations[index].class_id)
         new_ann = self._rect_to_normalized(new_rect, self._annotations[index].class_id)
-        old_ann.shape_type = "bbox"
-        new_ann.shape_type = "bbox"
+        shape_type = self._annotations[index].shape_type if self._annotations[index].shape_type in ("bbox", "square") else "bbox"
+        old_ann.shape_type = shape_type
+        new_ann.shape_type = shape_type
         self.annotation_geometry_changed.emit(index, old_ann, new_ann)
 
     def select_annotation(self, index: int) -> None:
@@ -614,7 +620,7 @@ class ImageCanvas(QGraphicsView):
         self.cancel_create_mode()
         self._create_mode = True
         self._create_class_id = max(0, class_id)
-        self._create_shape_type = shape_type if shape_type in ("bbox", "rotated", "polygon") else "bbox"
+        self._create_shape_type = shape_type if shape_type in ("bbox", "square", "point_square", "rotated", "polygon") else "bbox"
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setCursor(Qt.CursorShape.CrossCursor)
 
@@ -641,7 +647,38 @@ class ImageCanvas(QGraphicsView):
     def _create_preview_rect(self, start: QPointF, end: QPointF) -> QRectF:
         a = self._clamp_point_to_image(start)
         b = self._clamp_point_to_image(end)
-        return QRectF(a, b).normalized()
+
+        if self._create_shape_type != "square":
+            return QRectF(a, b).normalized()
+
+        dx = b.x() - a.x()
+        dy = b.y() - a.y()
+        side = max(abs(dx), abs(dy))
+        if side <= 0:
+            return QRectF(a, a)
+
+        sx = 1.0 if dx >= 0 else -1.0
+        sy = 1.0 if dy >= 0 else -1.0
+
+        max_side_x = self._image_rect.right() - a.x() if sx >= 0 else a.x() - self._image_rect.left()
+        max_side_y = self._image_rect.bottom() - a.y() if sy >= 0 else a.y() - self._image_rect.top()
+        side = max(0.0, min(side, max_side_x, max_side_y))
+
+        corner = QPointF(a.x() + sx * side, a.y() + sy * side)
+        return QRectF(a, corner).normalized()
+
+    def _centered_square_rect(self, center: QPointF) -> QRectF:
+        c = self._clamp_point_to_image(center)
+        if self._image_rect.isNull():
+            return QRectF(c, c)
+
+        max_side = max(6.0, min(self._image_rect.width(), self._image_rect.height()))
+        side = min(float(self._point_square_side_px), max_side)
+        half = side / 2.0
+
+        cx = clamp(c.x(), self._image_rect.left() + half, self._image_rect.right() - half)
+        cy = clamp(c.y(), self._image_rect.top() + half, self._image_rect.bottom() - half)
+        return QRectF(cx - half, cy - half, side, side)
 
     def _update_polygon_preview(self, current: QPointF | None = None) -> None:
         if not self._poly_points_scene:
@@ -711,7 +748,24 @@ class ImageCanvas(QGraphicsView):
             scene_pos = self.mapToScene(event.position().toPoint())
             clamped = self._clamp_point_to_image(scene_pos)
 
-            if self._create_shape_type == "bbox":
+            if self._create_shape_type == "point_square":
+                if event.button() == Qt.MouseButton.LeftButton:
+                    if not self._image_rect.contains(scene_pos):
+                        event.accept()
+                        return
+                    rect = self._centered_square_rect(clamped)
+                    if rect.width() >= 6 and rect.height() >= 6:
+                        created_ann = self._rect_to_normalized(rect, self._create_class_id)
+                        created_ann.shape_type = "square"
+                        self.annotation_created.emit(created_ann)
+                    event.accept()
+                    return
+                if event.button() == Qt.MouseButton.RightButton:
+                    self.cancel_create_mode()
+                    event.accept()
+                    return
+
+            if self._create_shape_type in ("bbox", "square"):
                 if event.button() == Qt.MouseButton.LeftButton:
                     if not self._image_rect.contains(scene_pos):
                         event.accept()
@@ -756,7 +810,7 @@ class ImageCanvas(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
-        if self._create_mode and self._create_shape_type == "bbox" and self._creating and self._create_preview_item is not None:
+        if self._create_mode and self._create_shape_type in ("bbox", "square") and self._creating and self._create_preview_item is not None:
             scene_pos = self.mapToScene(event.position().toPoint())
             rect = self._create_preview_rect(self._create_start_scene, scene_pos)
             self._create_preview_item.setRect(rect)
@@ -772,7 +826,7 @@ class ImageCanvas(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._create_mode and self._create_shape_type == "bbox" and self._creating and event.button() == Qt.MouseButton.LeftButton:
+        if self._create_mode and self._create_shape_type in ("bbox", "square") and self._creating and event.button() == Qt.MouseButton.LeftButton:
             self._creating = False
             created_ann = None
             if self._create_preview_item is not None:
@@ -785,6 +839,8 @@ class ImageCanvas(QGraphicsView):
             self.cancel_create_mode()
 
             if created_ann is not None:
+                if self._create_shape_type == "square":
+                    created_ann.shape_type = "square"
                 self.annotation_created.emit(created_ann)
             event.accept()
             return

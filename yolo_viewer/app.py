@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QSpinBox,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
@@ -344,9 +345,7 @@ class MainWindow(QMainWindow):
         self.canvas.delete_requested.connect(self.on_delete_annotation)
         middle_layout.addWidget(self.canvas, stretch=8)
 
-        tip_label = QLabel(
-            "提示：新增矩形=拖拽；新增旋转框=依次点击4个点；新增多边形=逐点点击，右键或回车完成。编辑矩形：拖边/角点可缩放，拖中心点或框内可平移。"
-        )
+        tip_label = QLabel("\u63d0\u793a\uff1a\u65b0\u589e\u77e9\u5f62=\u62d6\u62fd\uff1b\u65b0\u589e\u6b63\u65b9\u5f62=\u62d6\u62fd\u5e76\u5f3a\u5236\u957f\u5bbd\u4e00\u81f4\uff1b\u70b9\u6807\u6ce8(\u6b63\u65b9)=\u5355\u51fb\u751f\u6210\u5c45\u4e2d\u6b63\u65b9\u5f62\uff1b\u65b0\u589e\u65cb\u8f6c\u6846=\u4f9d\u6b21\u70b9\u51fb4\u4e2a\u70b9\uff1b\u65b0\u589e\u591a\u8fb9\u5f62=\u9010\u70b9\u70b9\u51fb\uff0c\u53f3\u952e\u6216\u56de\u8f66\u5b8c\u6210\u3002\u7f16\u8f91\u77e9\u5f62\uff1a\u62d6\u8fb9/\u89d2\u70b9\u53ef\u7f29\u653e\uff0c\u62d6\u4e2d\u5fc3\u70b9\u6216\u6846\u5185\u53ef\u5e73\u79fb\u3002")
         tip_label.setObjectName("hintLabel")
         tip_label.setWordWrap(True)
         middle_layout.addWidget(tip_label, stretch=0)
@@ -375,7 +374,7 @@ class MainWindow(QMainWindow):
         )
         header_tips = [
             "当前标注在图片中的行号",
-            "标注几何类型（矩形/旋转框/多边形）",
+            "\u6807\u6ce8\u51e0\u4f55\u7c7b\u578b\uff08\u77e9\u5f62/\u6b63\u65b9\u5f62/\u65cb\u8f6c\u6846/\u591a\u8fb9\u5f62\uff09",
             "YOLO 类别 ID",
             "类别名称",
             "点数量（矩形默认 4）",
@@ -408,15 +407,52 @@ class MainWindow(QMainWindow):
         create_row.addWidget(create_label)
 
         self.shape_mode_combo = QComboBox()
-        self.shape_mode_combo.addItems(["矩形", "旋转框", "多边形"])
+        self.shape_mode_combo.addItems([
+            "\u77e9\u5f62",
+            "\u6b63\u65b9\u5f62",
+            "\u70b9\u6807\u6ce8(\u6b63\u65b9)",
+            "\u65cb\u8f6c\u6846",
+            "\u591a\u8fb9\u5f62",
+        ])
         self.shape_mode_combo.setMinimumHeight(34)
-        create_row.addWidget(self.shape_mode_combo)
+        self.shape_mode_combo.setMinimumWidth(190)
+        self.shape_mode_combo.setMinimumContentsLength(8)
+        self.shape_mode_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
+        self.shape_mode_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.shape_mode_combo.currentIndexChanged.connect(self.on_shape_mode_changed)
+        create_row.addWidget(self.shape_mode_combo, 1)
 
-        self.add_btn = QPushButton("新增标注")
+        self.add_btn = QPushButton("\u65b0\u589e\u6807\u6ce8")
         self.add_btn.setMinimumHeight(38)
+        self.add_btn.setMinimumWidth(108)
+        self.add_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.add_btn.clicked.connect(self.start_add_box_mode)
         create_row.addWidget(self.add_btn)
         right_layout.addLayout(create_row)
+
+        self.point_square_row = QWidget()
+        point_row = QHBoxLayout(self.point_square_row)
+        point_row.setContentsMargins(0, 0, 0, 0)
+        point_row.setSpacing(8)
+
+        self.point_square_side_label = QLabel("\u8fb9\u957f(px)")
+        self.point_square_side_label.setObjectName("sectionSubTitle")
+        point_row.addWidget(self.point_square_side_label)
+
+        self.point_square_side_spin = QSpinBox()
+        self.point_square_side_spin.setRange(6, 4096)
+        self.point_square_side_spin.setSingleStep(2)
+        self.point_square_side_spin.setValue(32)
+        self.point_square_side_spin.setMinimumHeight(34)
+        self.point_square_side_spin.setFixedWidth(88)
+        self.point_square_side_spin.setToolTip("\u70b9\u6807\u6ce8\u6a21\u5f0f\u4e0b\u751f\u6210\u6b63\u65b9\u5f62\u7684\u8fb9\u957f\uff08\u50cf\u7d20\uff09")
+        self.point_square_side_spin.valueChanged.connect(self.on_point_square_side_changed)
+        point_row.addWidget(self.point_square_side_spin)
+        point_row.addStretch(1)
+
+        self.canvas.set_point_square_side_px(self.point_square_side_spin.value())
+        right_layout.addWidget(self.point_square_row)
+        self.on_shape_mode_changed(self.shape_mode_combo.currentIndex())
 
         self.center_marker_check = QCheckBox("显示中心标记（白圈+十字）")
         self.center_marker_check.setChecked(True)
@@ -1635,7 +1671,7 @@ class MainWindow(QMainWindow):
         return checked
 
     def _refresh_annotation_table(self, selected_index: int = -1) -> None:
-        shape_map = {"bbox": "矩形", "rotated": "旋转框", "polygon": "多边形"}
+        shape_map = {"bbox": "\u77e9\u5f62", "square": "\u6b63\u65b9\u5f62", "rotated": "\u65cb\u8f6c\u6846", "polygon": "\u591a\u8fb9\u5f62"}
         self.annotation_table.setRowCount(len(self.current_annotations))
         for row, ann in enumerate(self.current_annotations):
             self._ensure_class_name(ann.class_id)
@@ -1704,7 +1740,15 @@ class MainWindow(QMainWindow):
         self.issue_text.setText("\n".join(lines))
     def on_center_marker_toggled(self, checked: bool) -> None:
         self.canvas.set_center_marker_visible(checked)
-        self.statusBar().showMessage("已显示中心标记。" if checked else "已隐藏中心标记。", 1800)
+        self.statusBar().showMessage("\u5df2\u663e\u793a\u4e2d\u5fc3\u6807\u8bb0\u3002" if checked else "\u5df2\u9690\u85cf\u4e2d\u5fc3\u6807\u8bb0\u3002", 1800)
+
+    def on_point_square_side_changed(self, value: int) -> None:
+        self.canvas.set_point_square_side_px(value)
+
+    def on_shape_mode_changed(self, _index: int) -> None:
+        is_point_mode = self.shape_mode_combo.currentIndex() == 2
+        self.point_square_row.setVisible(is_point_mode)
+        self.point_square_side_spin.setEnabled(is_point_mode)
 
     def start_add_box_mode(self) -> None:
         if self.current_index < 0:
@@ -1727,15 +1771,22 @@ class MainWindow(QMainWindow):
             return
 
         mode_index = self.shape_mode_combo.currentIndex() if hasattr(self, "shape_mode_combo") else 0
-        shape_mode = {0: "bbox", 1: "rotated", 2: "polygon"}.get(mode_index, "bbox")
+        shape_mode = {0: "bbox", 1: "square", 2: "point_square", 3: "rotated", 4: "polygon"}.get(mode_index, "bbox")
+        if shape_mode == "point_square" and hasattr(self, "point_square_side_spin"):
+            self.canvas.set_point_square_side_px(self.point_square_side_spin.value())
         self.canvas.start_create_mode(class_id, shape_mode)
 
         if shape_mode == "bbox":
-            msg = "新增矩形：在图片中按住左键拖动并松开完成，Esc 取消。"
+            msg = "\u65b0\u589e\u77e9\u5f62\uff1a\u5728\u56fe\u7247\u4e2d\u6309\u4f4f\u5de6\u952e\u62d6\u52a8\u5e76\u677e\u5f00\u5b8c\u6210\uff0cEsc \u53d6\u6d88\u3002"
+        elif shape_mode == "square":
+            msg = "\u65b0\u589e\u6b63\u65b9\u5f62\uff1a\u5728\u56fe\u7247\u4e2d\u62d6\u52a8\u7ed8\u5236\uff0c\u81ea\u52a8\u9501\u5b9a\u957f\u5bbd\u76f8\u7b49\uff0cEsc \u53d6\u6d88\u3002"
+        elif shape_mode == "point_square":
+            side = self.point_square_side_spin.value() if hasattr(self, "point_square_side_spin") else 32
+            msg = f"\u70b9\u6807\u6ce8\u6a21\u5f0f\uff1a\u5355\u51fb\u56fe\u50cf\u751f\u6210\u5c45\u4e2d\u6b63\u65b9\u5f62\uff08\u8fb9\u957f {side}px\uff09\uff0cEsc/\u53f3\u952e\u53d6\u6d88\u3002"
         elif shape_mode == "rotated":
-            msg = "新增旋转框：依次点击4个角点，或按 Enter 完成，Esc 取消。"
+            msg = "\u65b0\u589e\u65cb\u8f6c\u6846\uff1a\u4f9d\u6b21\u70b9\u51fb4\u4e2a\u89d2\u70b9\uff0c\u6216\u6309 Enter \u5b8c\u6210\uff0cEsc \u53d6\u6d88\u3002"
         else:
-            msg = "新增多边形：逐点点击，右键/Enter 完成，Esc 取消。"
+            msg = "\u65b0\u589e\u591a\u8fb9\u5f62\uff1a\u9010\u70b9\u70b9\u51fb\uff0c\u53f3\u952e/Enter \u5b8c\u6210\uff0cEsc \u53d6\u6d88\u3002"
         self.statusBar().showMessage(msg)
 
     def on_canvas_annotation_created(self, ann_obj: object) -> None:
@@ -2388,4 +2439,9 @@ def run() -> None:
     window = MainWindow()
     window.show()
     app.exec()
+
+
+
+
+
 

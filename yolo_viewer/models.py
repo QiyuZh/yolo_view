@@ -31,7 +31,7 @@ class Annotation:
         return len(pts)
 
     def to_yolo_line(self, include_confidence: bool = True) -> str:
-        if self.shape_type == "bbox" and not self.points:
+        if self.shape_type in ("bbox", "square") and not self.points:
             base = (
                 f"{self.class_id} "
                 f"{self.x_center:.6f} {self.y_center:.6f} "
@@ -90,3 +90,4 @@ class FileValidation:
     @property
     def has_error(self) -> bool:
         return any(issue.severity == "error" for issue in self.issues)
+
