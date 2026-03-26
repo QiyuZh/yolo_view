@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, QSize, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QIcon, QPixmap, QUndoStack
 from PyQt6.QtWidgets import (
     QApplication,
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -223,6 +224,17 @@ class MainWindow(QMainWindow):
         self.add_annotation_shortcut.setShortcut("Ctrl+N")
         self.add_annotation_shortcut.triggered.connect(self.start_add_box_mode)
         self.addAction(self.add_annotation_shortcut)
+        self.prev_file_shortcut = QAction(self)
+        self.prev_file_shortcut.setShortcut("A")
+        self.prev_file_shortcut.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.prev_file_shortcut.triggered.connect(self.select_prev_file)
+        self.addAction(self.prev_file_shortcut)
+
+        self.next_file_shortcut = QAction(self)
+        self.next_file_shortcut.setShortcut("D")
+        self.next_file_shortcut.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.next_file_shortcut.triggered.connect(self.select_next_file)
+        self.addAction(self.next_file_shortcut)
 
         root = QWidget(self)
         root.setObjectName("rootContainer")
@@ -350,7 +362,7 @@ class MainWindow(QMainWindow):
         tip_label.setWordWrap(True)
         middle_layout.addWidget(tip_label, stretch=0)
 
-        shortcut_label = QLabel("快捷键：Ctrl+O 导入 | F5 校验 | Ctrl+M 自动标注 | Ctrl+N 新增 | Delete 删除 | Ctrl+Z/Ctrl+Y 撤销重做")
+        shortcut_label = QLabel("快捷键：A 上一张 | D 下一张 | Ctrl+O 导入 | F5 校验 | Ctrl+M 自动标注 | Ctrl+N 新增 | Delete 删除 | Ctrl+Z/Ctrl+Y 撤销重做")
         shortcut_label.setObjectName("shortcutLabel")
         shortcut_label.setWordWrap(True)
         middle_layout.addWidget(shortcut_label, stretch=0)
@@ -1491,6 +1503,38 @@ class MainWindow(QMainWindow):
             return
         self._select_global_index(self.visible_indices[current_row])
 
+    def _is_text_input_focused(self) -> bool:
+        widget = QApplication.focusWidget()
+        if widget is None:
+            return False
+        if isinstance(widget, (QLineEdit, QTextEdit, QAbstractSpinBox)):
+            return True
+        if isinstance(widget, QComboBox) and widget.isEditable():
+            return True
+        return False
+
+    def _navigate_relative_file(self, step: int) -> None:
+        if step == 0 or not self.visible_indices:
+            return
+        if self._is_text_input_focused():
+            return
+
+        if self.current_index in self.visible_indices:
+            row = self.visible_indices.index(self.current_index) + step
+        else:
+            row = 0 if step > 0 else len(self.visible_indices) - 1
+
+        row = max(0, min(row, len(self.visible_indices) - 1))
+        target_idx = self.visible_indices[row]
+        if target_idx != self.current_index:
+            self._select_global_index(target_idx)
+
+    def select_prev_file(self) -> None:
+        self._navigate_relative_file(-1)
+
+    def select_next_file(self) -> None:
+        self._navigate_relative_file(1)
+
     def _select_global_index(self, idx: int) -> None:
         if idx < 0 or idx >= len(self.items):
             return
@@ -2439,9 +2483,4 @@ def run() -> None:
     window = MainWindow()
     window.show()
     app.exec()
-
-
-
-
-
 
